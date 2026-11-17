@@ -2,8 +2,8 @@
 
 UR5e pick-and-place policies on LeRobot, currently with pi0.5.
 
-UR5e with a Robotiq 2F-85 or OnRobot RG2 gripper, RealSense D455 (front) and D405 (wrist)
-cameras and a 3Dconnexion SpaceMouse. LeRobot 0.7.0, locked with Pixi: setup/calibration → SpaceMouse collection →
+UR5e with a Robotiq 2F-85 or OnRobot RG2 gripper, RealSense D455 or D435i (front, external) and D405
+(wrist) cameras and a 3Dconnexion SpaceMouse. LeRobot 0.7.0, locked with Pixi: setup/calibration → SpaceMouse collection →
 fresh-base LoRA training with automatic train-only stats → supervised RTC rollout.
 Data, checkpoints and machine configuration stay local; Hub uploads are disabled.
 
@@ -29,7 +29,7 @@ driver supporting CUDA 12.9.
 | --- | --- | --- |
 | GPU | 24 GB VRAM (e.g. RTX 4090) | Rollout peaks at about 8.9 GiB, so a 10 GB RTX 3080 works with little headroom. |
 | Disk | 50 GB+ free | Environment about 13 GB, plus model weights, datasets and outputs. |
-| Hardware | UR5e in Remote Control, gripper URCap, D455 + D405 on USB 3, SpaceMouse | See the [operating guide](docs/operating-guide.md). |
+| Hardware | UR5e in Remote Control, gripper URCap, D455 or D435i + D405 on USB 3, SpaceMouse | See the [operating guide](docs/operating-guide.md). |
 
 **Training machine.** Can be the robot PC if it has the GPU memory.
 

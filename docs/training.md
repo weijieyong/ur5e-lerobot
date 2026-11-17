@@ -72,10 +72,10 @@ Dataset root is project-relative. Both dataset inputs are explicit; the one
 `config/training/reference-15k.recipe.json` owns training settings.
 
 The supported route is local, single-task, fresh-base training: no streaming or
-resume. Native splitting holds out the last ceil(episodes ×0.2) episodes **per task**,
+resume. Native splitting holds out the last ceil(episodes × 0.2) episodes **per task**,
 not a random frame sample. Both training and development episodes must exist.
 Use matching six-joint radians plus normalized `gripper.pos` state/action order,
-recorder camera identities and the collection/control rate15Hz.
+recorder camera identities and the collection/control rate of 15 Hz.
 
 Each rank fits independently from actual `train.hf_dataset` numeric columns.
 State quantiles use all training states; action quantiles use native complete
@@ -94,19 +94,27 @@ it is never a required input or proof. Keep finalized dataset files unchanged
 throughout a run. `train-check` checks assets/native CPU configuration, not fitted
 statistics or a model load; fitting occurs when training starts.
 
-Reference settings: original base revision
-`22c30e5b34f9e7ab738b1b34fc2fc5ecfe2d28f0`, peak1e-4, floor1e-5,
-warmup1000, decay horizon30000, stop15000, global batch8, accumulation1,
-rank32/alpha64 expert-side LoRA, frozen VLM, BF16, no augmentation, seed1000.
-Full development evaluation and save occur every2500 steps. This is a reference
-schedule through15k, not a bit-identical replay or guarantee for new data.
+Reference settings:
 
-The reference training host must expose eligible physical GPU indices0 and1.
-Admission rejects a missing eligible index, selects only idle eligible devices and
-revalidates their UUIDs before launch. One idle GPU on that two-device host uses
-batch8; this does not support/qualify a one-physical-GPU host. No idle GPU means
-refusal without waiting or touching other jobs. Version/source/base hash, strict
-loading, optimizer, LoRA tensor, schedule and save guards remain intact.
+- Base revision: `22c30e5b34f9e7ab738b1b34fc2fc5ecfe2d28f0`.
+- Learning rate: peak 1e-4, floor 1e-5, warmup 1000 steps, decay horizon 30000 steps.
+- Stop: 15000 steps.
+- Batch: global batch 8, gradient accumulation 1.
+- Adapter: expert-side LoRA with rank 32 and alpha 64. The VLM is frozen.
+- Precision and data: BF16, no augmentation, seed 1000.
+- Full development evaluation and save every 2500 steps.
+
+This is a reference schedule through 15k steps. It is not a bit-identical replay and
+does not guarantee results on new data.
+
+The recipe allows physical GPU indices 0 and 1. At launch the trainer queries
+`nvidia-smi`, keeps the allowed GPUs that exist and are idle, and revalidates their
+UUIDs before it starts. Two idle GPUs train with batch 4 per GPU. One idle GPU trains
+with batch 8, so the global batch stays 8 and the schedule does not change. A one-GPU
+host works if that GPU has index 0 or 1 and enough memory (the README lists a 48 GB
+minimum). If no allowed GPU is idle, the trainer refuses to start. It does not wait and
+does not touch other jobs. Version, source, base hash, strict loading, optimizer, LoRA
+tensor, schedule and save guards stay in force.
 Run the operator-authorized GPU smoke/save and strict reload checks before a long
 run. Every run has a new `outputs/training-runs/` directory.
 

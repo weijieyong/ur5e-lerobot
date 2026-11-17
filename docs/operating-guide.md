@@ -50,7 +50,7 @@ pixi run --locked test
   new grip while the fingers move, so the plugin stops a moving gripper before reversing.
   `GRIPPER_FORCE` (0–255, RG2 0–40 N; empty means 128, about 20 N) applies to teleop,
   recording and rollout alike; the former `ROLLOUT_GRIPPER_FORCE` is still read if it is unset.
-- **USB devices:** D455/D405 cameras on suitable USB 3 connections and SpaceMouse
+- **USB devices:** D455 or D435i (front) and D405 (wrist) cameras on suitable USB 3 connections and SpaceMouse
   access as the logged-in user. Host udev/device permissions are outside Pixi;
   use the SpaceMouse rule linked below and check camera access with `hw-check`.
 - **Machine configuration:** correct IPs, camera serials, paths and measured
@@ -101,28 +101,23 @@ Run locked installation and setup only as part of an authorized source update.
 ### First-time bring-up order
 
 Follow these steps in order on a new machine, after `pixi run --locked setup`. The sections
-below describe each command in detail. Steps 6 to 9 save a pose or move the arm, so keep the
+below describe each command in detail. Steps 7 to 10 save a pose or move the arm, so keep the
 pendant and the emergency stop within reach.
 
 1. Connect the hardware. Plug both cameras into USB 3 ports, plug in the SpaceMouse and
    connect the PC to the robot controller network. The gripper has no cable to the PC. The
    PC reaches it through the URCap on the robot: port 63352 for a Robotiq, port 41414 for an
-   RG2. On the pendant, set the active TCP, power the arm on, release the brakes and select
-   Remote Control.
-2. Find the camera serials. This command prints one line per connected RealSense camera, with
-   its model and serial number:
-
-   ```sh
-   pixi run python -c "import pyrealsense2 as rs; [print(d.get_info(rs.camera_info.name), d.get_info(rs.camera_info.serial_number)) for d in rs.context().query_devices()]"
-   ```
-
-   If you cannot tell which camera is which, unplug one and run it again. Close any other
-   program that uses the cameras first.
-3. Edit `config/local/machine.env`. Set `UR5E_IP`, `GRIPPER_TYPE`, `FRONT_CAMERA_SERIAL`
+   RG2.
+2. Set up the pendant. Install the URCap for your gripper, set the TCP and measure the payload,
+   as described in [Pendant and gripper setup](#pendant-and-gripper-setup). Then power the
+   arm on, release the brakes and select Remote Control.
+3. Find the camera serials with `pixi run lerobot-find-cameras realsense`. See
+   [Camera serial numbers](#camera-serial-numbers).
+4. Edit `config/local/machine.env`. Set `UR5E_IP`, `GRIPPER_TYPE`, `FRONT_CAMERA_SERIAL`
    (the external camera), `WRIST_CAMERA_SERIAL` (the camera on the gripper), `DATASET_REPO_ID`
-   and `TASK`. Leave the home, neutral, floor and side keys alone. Steps 6 to 8 save measured
+   and `TASK`. Leave the home, neutral, floor and side keys alone. Steps 7 to 9 save measured
    values for them.
-4. Check the devices. These commands only read from the hardware. They do not command the arm
+5. Check the devices. These commands only read from the hardware. They do not command the arm
    or the gripper:
 
    ```sh
@@ -133,9 +128,9 @@ pendant and the emergency stop within reach.
 
    Confirm that the front and wrist images come from the right cameras and that each
    SpaceMouse direction matches the description in [Read-only checks](#read-only-checks).
-5. Adjust the camera colour with `pixi run calibrate-cameras`. Hold white paper in front of
+6. Adjust the camera colour with `pixi run calibrate-cameras`. Hold white paper in front of
    each camera. The command asks for y or n before it writes to `machine.env`.
-6. Save the home and neutral poses. Move the arm to each pose with the pendant, then run the
+7. Save the home and neutral poses. Move the arm to each pose with the pendant, then run the
    command. Both only read the robot and write to `machine.env`:
 
    ```sh
@@ -143,15 +138,19 @@ pendant and the emergency stop within reach.
    pixi run set-neutral
    ```
 
-7. Save the floor with `pixi run set-floor` only if you will skip step 8. Hold the
+   Nothing runs `set-neutral` for you, and it does not change `SPACEMOUSE_AXES`. The default
+   `xyz_yaw` locks roll and pitch. To allow limited tilt, run `pixi run set-neutral`
+   yourself, then set `SPACEMOUSE_AXES=bounded` in `machine.env`. The `bounded` mode refuses
+   to start without a saved neutral.
+8. Save the floor with `pixi run set-floor` only if you will skip step 9. Hold the
    fingertips just above the table first, then return the arm to home.
-8. Teach the workspace boundaries with `pixi run set-boundaries`. This moves the arm with the
+9. Teach the workspace boundaries with `pixi run set-boundaries`. This moves the arm with the
    SpaceMouse and captures the floor, left, right, front and back faces. It replaces
-   `UR5E_Z_MIN_M`, so the floor from step 7 does not apply once you save here.
-9. Run the first motion test with `pixi run teleop`. Connecting uploads the control script and
+   `UR5E_Z_MIN_M`, so the floor from step 8 does not apply once you save here.
+10. Run the first motion test with `pixi run teleop`. Connecting uploads the control script and
    may activate the gripper. Set the low speeds listed under
    [Motion and recovery](#motion-and-recovery) before you start.
-10. Record with `pixi run record`, then review the data with `pixi run info` and
+11. Record with `pixi run record`, then review the data with `pixi run info` and
     `pixi run view 0`. Training and rollout are in [training and deployment](training.md).
 
 Restart any running command after you change `machine.env` or save a pose.
@@ -166,6 +165,42 @@ confirm the active TCP/tool definition, power/brakes and controller safety setti
 select Remote Control before software motion. Keep fingers clear for gripper activation.
 Never run teleop, recording, rollout or boundary teaching concurrently against the arm.
 
+### Pendant and gripper setup
+
+Do this once per robot, on the pendant, before the first software connection. This repo
+does not ship the URCaps. Follow the vendor manual for your PolyScope version if the
+steps below differ from what you see.
+
+1. Install the URCap for your gripper. Copy the `.urcap` file to a USB stick and plug it
+   into the pendant. Open Settings, then System, then URCaps. Tap `+`, pick the file and
+   restart when asked.
+
+   | `GRIPPER_TYPE` | URCap source | After the restart |
+   | --- | --- | --- |
+   | `robotiq` | The 2F-85 gripper software for Universal Robots, from [support.robotiq.com](https://support.robotiq.com). | Open Installation, then URCaps, then the Robotiq gripper tab. Activate the gripper and confirm it reports ready. |
+   | `onrobot_rg2` | The OnRobot URCap, from the OnRobot website. Remove older OnRobot URCap versions first. Current versions need PolyScope 5.4 or later. | Open Installation, then URCaps, then the OnRobot entry. Confirm it detects the RG2. |
+
+   An RG2 gets power through the tool flange, so connect it to the tool connector with
+   the OnRobot cable and keep the arm powered on. OnRobot warns never to connect the
+   Quick Changer for I/O to an e-Series tool connector.
+2. Set the TCP. Open Installation, then General, then TCP. Put the TCP at the point
+   between the fingertips: measure its offset from the tool flange along the tool Z axis
+   and leave the rotation at zero. `set-floor`, `set-boundaries` and the SpaceMouse
+   guards all use this TCP, so measure it carefully. If you change the TCP later, save
+   the floor and boundaries again.
+3. Set the payload with the pendant. Mount the gripper, its mounting plate and the wrist
+   camera first. Open Installation, then General, then Payload, and start the payload
+   measurement (the button is named Measure on current PolyScope versions). The pendant
+   asks you to jog the arm to a few poses with different tool orientations, measures the
+   load at each and fills in the mass and centre of gravity. Follow its on-screen prompts
+   and keep the workspace clear while it runs. Check that the result is close to the
+   gripper datasheet mass plus the mount and camera. A wrong payload makes freedrive
+   drift and can trigger protective stops. Measure again after you change anything
+   mounted on the flange.
+4. Select Remote Control and run `pixi run hw-check --only robot`, then
+   `pixi run hw-check --only gripper`. A refused connection to
+   port 63352 or 41414 usually means the URCap is missing or not active.
+
 ### Camera serial numbers
 
 With both cameras plugged in and no other program using them, list them:
@@ -174,7 +209,7 @@ With both cameras plugged in and no other program using them, list them:
 pixi run lerobot-find-cameras realsense
 ```
 
-Each camera prints its model (`Name`) and serial number (`Id`). Put the D455's serial in
+Each camera prints its model (`Name`) and serial number (`Id`). Put the front camera's (D455 or D435i) serial in
 `FRONT_CAMERA_SERIAL` and the D405's in `WRIST_CAMERA_SERIAL` in `config/local/machine.env`.
 The command also saves one frame per camera to `outputs/captured_images/realsense_<serial>.png`;
 use those to tell the cameras apart if both are the same model.
@@ -236,7 +271,7 @@ Test roll/pitch well above the table. Stop and diagnose wrong direction, jerkine
 rejected commands or cleanup errors before collection.
 
 `SPACEMOUSE_AXES=bounded` clamps neutral-relative roll and pitch separately
-(`SPACEMOUSE_TILT_LIMIT_DEG`, initially 30 degrees), with free base-Z yaw:
+(`SPACEMOUSE_TILT_LIMIT_DEG`, initially 10 degrees), with free base-Z yaw:
 `R = Rz(yaw) Ry(pitch) Rx(roll) R_neutral`. This is not a total-tilt cone.
 `xyz_yaw` locks roll/pitch; `full` removes tilt limits.
 `pixi run hw-check --only robot` reports neutral-relative angles without motion.
