@@ -674,12 +674,12 @@ def is_idle(gpu):
 
 
 def select_idle_gpus(inventory, eligible):
-    """All idle GPUs among the preset's eligible indices (both if both idle); refuse if none."""
-    missing = [g for g in eligible if g not in inventory]
-    require(not missing, f"eligible GPUs {missing} not present")
+    """All idle GPUs among the preset's eligible indices that exist; refuse if none."""
+    present = [g for g in sorted(eligible) if g in inventory]
+    require(present, f"none of the eligible GPUs {sorted(eligible)} is present")
     idle = [
         {"index": g, "uuid": inventory[g]["uuid"]}
-        for g in sorted(eligible)
+        for g in present
         if is_idle(inventory[g])
     ]
     require(
@@ -687,7 +687,7 @@ def select_idle_gpus(inventory, eligible):
         "no idle eligible GPU: "
         + "; ".join(
             f"GPU {g}: pids={inventory[g]['pids']} mem={inventory[g]['memory_mib']}MiB util={inventory[g]['util_pct']}%"
-            for g in eligible
+            for g in present
         )
         + " (not starting, not waiting)",
     )

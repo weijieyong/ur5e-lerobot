@@ -686,6 +686,12 @@ class LaunchSeamTests(unittest.TestCase):
         # GPU2 is ineligible (not in guards.gpus) even though it would never be considered idle anyway.
         self.assertNotIn(2, [g["index"] for g in self.select()])
 
+    def test_single_gpu_host_selects_the_one_eligible_gpu(self):
+        self.assertEqual(self.select("", "0, GPU-a, 15, 0\n"), GPU0)
+        self.assertEqual(self.select("", "1, GPU-b, 15, 0\n"), GPU1)
+        with self.assertRaisesRegex(tl.TrainingConfigError, "no idle eligible GPU"):
+            self.select("GPU-a, 1\n", "0, GPU-a, 15, 0\n")
+
     def test_any_compute_process_is_busy_even_at_low_utilization_and_memory(self):
         gpus = "0, GPU-a, 0, 0\n1, GPU-b, 0, 0\n"
         self.assertEqual(self.select("GPU-a, 99\n", gpus), GPU1)

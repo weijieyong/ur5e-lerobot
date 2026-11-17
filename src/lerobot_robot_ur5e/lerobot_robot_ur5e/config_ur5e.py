@@ -163,7 +163,7 @@ class SpaceMouseConfig(TeleoperatorConfig):
         default_factory=lambda: _env_floats("SPACEMOUSE_NEUTRAL_ROTVEC")
     )
     tilt_limit_deg: float = field(
-        default_factory=lambda: float(_env("SPACEMOUSE_TILT_LIMIT_DEG", "30"))
+        default_factory=lambda: float(_env("SPACEMOUSE_TILT_LIMIT_DEG", "10"))
     )
 
     max_linear_speed_m_s: float = field(
