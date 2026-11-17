@@ -2,9 +2,49 @@
 
 Use the [operating guide](operating-guide.md) to record and review demonstrations.
 Copy the complete native v3 dataset (`meta`, `data`, `videos`) to the training host,
-checking transfer hashes. Keep original bytes immutable. Obtain approved base and
-tokenizer assets separately; the training launcher neither downloads nor provisions them.
-Keep `HF_HUB_OFFLINE=1`; an empty cache cannot load a policy.
+checking transfer hashes. Keep original bytes immutable. The training launcher
+never downloads anything; fetch the base model and tokenizer once, below.
+
+## Model downloads
+
+Training needs two Hugging Face assets in the project cache (`hf/hub`, set by `HF_HOME`
+in `config/local/machine.env`). Only the training machine needs them: the robot PC gets
+the tokenizer inside the copied checkpoint.
+
+| Asset | Repo | Access |
+| --- | --- | --- |
+| pi0.5 base weights (14.5 GB) | [`lerobot/pi05_base`](https://huggingface.co/lerobot/pi05_base) | Public |
+| PaliGemma tokenizer | [`google/paligemma-3b-pt-224`](https://huggingface.co/google/paligemma-3b-pt-224) | Gated |
+
+> [!IMPORTANT]
+> Before downloading the tokenizer, open its repo page, accept the Gemma license and wait
+> for approval. Without it the download fails with `Access denied`.
+
+For the first download, set `HF_HUB_OFFLINE=0` in `config/local/machine.env`; it applies to
+every `pixi run`, so a `HF_HUB_OFFLINE=0 pixi run ...` prefix has no effect.
+
+Log in with a Hugging Face [access token](https://huggingface.co/settings/tokens) (read scope).
+The token is saved under the project's `hf/` folder, which is git-ignored:
+
+```sh
+pixi run hf auth login
+```
+
+Download both assets:
+
+```sh
+pixi run hf download lerobot/pi05_base --revision 22c30e5b34f9e7ab738b1b34fc2fc5ecfe2d28f0
+pixi run hf download google/paligemma-3b-pt-224 \
+  config.json tokenizer.json tokenizer.model tokenizer_config.json \
+  special_tokens_map.json added_tokens.json
+```
+
+> [!TIP]
+> Set `HF_HUB_OFFLINE=1` again afterwards. Training and rollout load only local files
+> either way, so forgetting only affects LeRobot commands you run by hand.
+
+The revision is the snapshot `config/training/reference-15k.recipe.json` expects;
+`pixi run train-check` confirms the base snapshot is in place.
 
 ## Train directly from finalized recordings
 

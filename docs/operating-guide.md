@@ -6,25 +6,28 @@ Start at the [README](../README.md). This guide owns setup, calibration, collect
 
 ### Requirements outside Pixi
 
-The verified baseline is **Ubuntu 24.04 x86-64, Pixi 0.83.0 and a working NVIDIA
-GPU/driver**. With the source checkout and network/storage below, Pixi installs
-the locked software environment. Other Linux distributions, ARM, macOS and
-Windows/WSL have not been validated by this smoke test.
+> [!NOTE]
+> Pixi installs the whole software stack (Python, PyTorch, CUDA libraries, LeRobot, the
+> local plugin); no host Python, ROS, Conda or CUDA toolkit is needed. This section lists
+> only what Pixi cannot provide: OS, NVIDIA driver, network and storage.
+
+Tested on **Ubuntu 22.04 x86-64** (robot PC and training machine: full workflow) with
+**Pixi 0.83.0 and a working NVIDIA GPU/driver**. `pixi run smoke-docker` additionally
+checks a clean install and the offline tests in an Ubuntu 24.04 container. With the source
+checkout and network/storage below, Pixi installs the locked software environment.
+Other Linux distributions, ARM, macOS and Windows/WSL have not been validated.
 
 | Requirement | What to provide on the host |
 | --- | --- |
-| OS | Ubuntu 24.04 x86-64 is the tested Linux userspace. |
+| OS | Ubuntu 22.04 x86-64 (robot PC and training machine: full workflow); Ubuntu 24.04 install and offline tests in the clean container. |
 | Pixi and source | Pixi 0.83.0 on PATH and a checkout including `pixi.lock`. Git is needed to clone, not to run the tasks. |
 | NVIDIA GPU/driver | A driver that supports the GPU and the locked CUDA 12.9 runtime. The clean-container test passed on RTX 5080 / driver 595.99.02; this is a tested combination, not a minimum driver version. |
 | GPU capacity | pi0.5 training/inference uses bfloat16 and needs enough VRAM for the chosen workload. The small CUDA test establishes neither policy fit nor a minimum VRAM/RAM requirement. |
 | Network and certificates | Internet access with working HTTPS trust to download Pixi and packages on first setup. Model downloads are separate; an installed environment with cached assets can be used offline. |
 | Storage | Writable native Linux storage for the checkout and caches. The installed environment was about 13 GB; budget 30 GB+ for dependencies/cache, plus model weights, datasets and outputs. This is a planning allowance, not a measured minimum. |
 
-Pixi supplies Python, PyTorch, CUDA userspace libraries, LeRobot, the local plugin,
-camera/input libraries and the other locked dependencies. A separate host Python,
-ROS, Conda environment, CUDA toolkit or compiler is not needed for the tested
-installation and offline checks. Docker and NVIDIA Container Toolkit are needed
-only to repeat the container smoke test, not for normal native `pixi run` use.
+Docker and NVIDIA Container Toolkit are needed only to repeat the container smoke
+test, not for normal native `pixi run` use.
 
 From the project directory (the first command also installs the environment):
 
@@ -43,8 +46,6 @@ pixi run --locked test
   and safety settings, and the URCap for the configured `GRIPPER_TYPE`: `robotiq`
   (Robotiq URCap socket, port 63352) or `onrobot_rg2` (OnRobot URCap XML-RPC, port
   41414; the RG2 is powered by the tool flange, so the arm must be powered on).
-  A latched RG2 safety switch is cleared only by Power cycle in the OnRobot toolbar.
-  `GRIPPER_CLOSE_WIDTH_MM` (default 8) keeps RG2 closes above 0 mm, which would latch it.
   The RG2 has no speed input (a full stroke takes about a second); its URCap ignores a
   new grip while the fingers move, so the plugin stops a moving gripper before reversing.
   `GRIPPER_FORCE` (0–255, RG2 0–40 N; empty means 128, about 20 N) applies to teleop,
@@ -55,6 +56,10 @@ pixi run --locked test
 - **Machine configuration:** correct IPs, camera serials, paths and measured
   home/floor/boundary/neutral references in `config/local/machine.env`. Example
   values do not establish a calibrated or safe robot setup.
+
+> [!CAUTION]
+> Closing the RG2 to 0 mm latches its safety switch, which only a Power cycle in the
+> OnRobot toolbar clears. `GRIPPER_CLOSE_WIDTH_MM` (default 8) keeps closes above 0 mm.
 
 `pixi run smoke-docker` ([details](../docker/smoke/README.md)) checks a locked
 install, config creation, CUDA float32/bfloat16 calculations and the offline tests in a
@@ -169,9 +174,11 @@ An outside-range posture holds puck targets instead of snapping to neutral.
 RECOVERY permits h with a clear path or pendant repositioning. Teleop resumes
 when in range; recording/rollout still require Right. A recording tilt error
 discards the unsaved attempt only. Other hardware/input errors propagate.
-Esc/Ctrl+C stops normal streaming. **Homing is a blocking joint move: use the
-pendant stop/e-stop to interrupt it.** Use h only while READY, never inside a
-recorded demonstration or while the policy runs.
+Esc/Ctrl+C stops normal streaming.
+
+> [!WARNING]
+> Homing is a blocking joint move: only the pendant stop/e-stop interrupts it. Use h only
+> while READY, never inside a recorded demonstration or while the policy runs.
 
 ### Teach floor and side boundaries
 
@@ -196,11 +203,12 @@ Saved keys are `UR5E_X_MIN_M`, `UR5E_X_MAX_M`, `UR5E_Y_MIN_M`, `UR5E_Y_MAX_M` an
 Restart to apply. Outward targets clamp; tangential/inward motion and gradual
 recovery from an outside start remain possible.
 
-**Floor, side and tilt guards constrain SpaceMouse TCP targets only.** They do not
-constrain joint-space homing or policy actions, the whole arm/tool or swept paths.
-Tilting can lower the gripper body while TCP height stays fixed. Controller safety,
-collision clearance, home-path safety and emergency-stop response need physical
-validation; working collection and offline tests do not establish them.
+> [!WARNING]
+> Floor, side and tilt guards constrain SpaceMouse TCP targets only. They do not
+> constrain joint-space homing or policy actions, the whole arm/tool or swept paths.
+> Tilting can lower the gripper body while TCP height stays fixed. Controller safety,
+> collision clearance, home-path safety and emergency-stop response need physical
+> validation; working collection and offline tests do not establish them.
 
 ### Camera colour adjustment
 
