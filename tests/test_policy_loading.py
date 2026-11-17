@@ -1,5 +1,6 @@
 """Exercise strict base and adapter loading with real tiny Torch/PEFT weights."""
 
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -123,6 +124,33 @@ class PolicyLoadingTests(unittest.TestCase):
             load_rollout_policy(self.config, fallback)
         fallback.assert_not_called()
 
+    def test_missing_relative_checkpoint_never_reaches_upstream(self):
+        fallback = Mock()
+        for path in (
+            "outputs/missing/pretrained_model",
+            "./outputs/missing",
+            "outputs/missing",
+        ):
+            with self.subTest(path=path):
+                self.config.pretrained_path = path
+                with self.assertRaisesRegex(
+                    FileNotFoundError, "checkpoint directory is missing"
+                ):
+                    load_rollout_policy(self.config, fallback)
+        fallback.assert_not_called()
+
+    def test_valid_relative_checkpoint_loads_real_tiny_weights(self):
+        self.config.pretrained_path = os.path.relpath(self.adapter)
+        fallback = Mock()
+        model = load_rollout_policy(self.config, fallback)
+        torch.testing.assert_close(
+            model.base_model.model.layer.base_layer.weight,
+            self.base_weights["layer.weight"],
+            rtol=0,
+            atol=0,
+        )
+        fallback.assert_not_called()
+
     def test_missing_local_adapter_config_never_reaches_upstream_loader(self):
         (self.adapter / "adapter_config.json").unlink()
         fallback = Mock()
@@ -133,10 +161,30 @@ class PolicyLoadingTests(unittest.TestCase):
         fallback.assert_not_called()
 
     def test_remote_identifier_preserves_upstream_loading(self):
-        self.config.pretrained_path = "organization/remote-policy"
-        fallback = Mock(return_value=object())
-        self.assertIs(load_rollout_policy(self.config, fallback), fallback.return_value)
-        fallback.assert_called_once_with(self.config)
+        for identifier in ("organization/remote-policy", "remote-policy"):
+            self.config.pretrained_path = identifier
+            fallback = Mock(return_value=object())
+            self.assertIs(
+                load_rollout_policy(self.config, fallback), fallback.return_value
+            )
+            fallback.assert_called_once_with(self.config)
+
+    def test_missing_path_objects_are_local_even_without_dot_prefix(self):
+        for value in (Path("./namespace/missing"), Path("missing")):
+            with self.subTest(value=value):
+                self.config.pretrained_path = value
+                fallback = Mock()
+                with self.assertRaisesRegex(
+                    FileNotFoundError, "checkpoint directory is missing"
+                ):
+                    load_rollout_policy(self.config, fallback)
+                fallback.assert_not_called()
+
+    def test_valid_path_object_loads_local_weights(self):
+        self.config.pretrained_path = self.adapter
+        fallback = Mock()
+        load_rollout_policy(self.config, fallback)
+        fallback.assert_not_called()
 
     def test_rollout_uses_strict_loader_and_restores_it_after_failure(self):
         from lerobot.inference import RTCInferenceConfig

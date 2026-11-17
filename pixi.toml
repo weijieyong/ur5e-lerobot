@@ -39,11 +39,11 @@ lint = { cmd = "ruff check .", description = "Correctness lint (ruff.toml); no h
 smoke-docker = { cmd = "./scripts/test_clean_env.sh", description = "Fresh-container locked install, CUDA check and offline tests (needs Docker + NVIDIA Container Toolkit; no robot hardware)" }
 hw-check = { cmd = "python -m scripts.hw_check", description = "Read-only check of robot, gripper, cameras and SpaceMouse" }
 calibrate-cameras = { cmd = "python -m scripts.calibrate_cameras", description = "Calibrate both cameras from white-paper patches; confirm y/n before updating machine.env" }
-info = { cmd = "lerobot-edit-dataset --repo_id=\"$DATASET_REPO_ID\" --root=\"$HF_LEROBOT_HOME/$DATASET_REPO_ID\" --operation.type=info --operation.show_features=true", description = "Inspect local dataset counts and feature names (read-only)" }
+info = { cmd = "lerobot-edit-dataset --repo_id=\"$DATASET_REPO_ID\" --root=\"$HF_LEROBOT_HOME/$DATASET_REPO_ID\" --operation.type=info --operation.show_features=true --push_to_hub=false", description = "Inspect local dataset counts and feature names (read-only)" }
 teleop = { cmd = "python -m scripts.teleop --robot.type=ur5e --teleop.type=spacemouse --teleop.stop_on_escape=true --fps=$CONTROL_FPS", description = "Drive the arm with the SpaceMouse (Esc or Ctrl+C: stop; h: home; no recording)" }
 
 [tasks.record]
-description = "Manual SpaceMouse recording; moves robot (Right: start/stop+save, Left: discard/retry, Esc: exit; waits in READY)"
+description = "Manual SpaceMouse recording; moves robot (keyboard Right arrow: start/stop+save, Left arrow: discard/retry, Esc: exit; waits in READY)"
 args = [{ arg = "episodes", default = "$RECORD_EPISODES" }, { arg = "extra", default = "" }]
 cmd = """python -m scripts.record --robot.type=ur5e --teleop.type=spacemouse \
   --dataset.repo_id="$DATASET_REPO_ID" --dataset.root="$HF_LEROBOT_HOME/$DATASET_REPO_ID" --dataset.single_task="$TASK" \
@@ -52,9 +52,18 @@ cmd = """python -m scripts.record --robot.type=ur5e --teleop.type=spacemouse \
   --dataset.no_stamp=true --display_data=true {{ extra }}"""
 
 [tasks.view]
-description = "Review one episode of the local dataset in Rerun"
+description = "Review one local demonstration episode in Rerun (no hardware access)"
 args = [{ arg = "episode", default = "0" }]
-cmd = "lerobot-dataset-viz --repo-id \"$DATASET_REPO_ID\" --episode-index {{ episode }}"
+cmd = "lerobot-dataset-viz --repo-id \"$DATASET_REPO_ID\" --root \"$HF_LEROBOT_HOME/$DATASET_REPO_ID\" --episode-index {{ episode }}"
+
+[tasks.rollout-info]
+description = "Inspect local rollout counts and features (read-only; no hardware access)"
+cmd = 'lerobot-edit-dataset --repo_id="$ROLLOUT_DATASET_REPO_ID" --root="$HF_LEROBOT_HOME/$ROLLOUT_DATASET_REPO_ID" --operation.type=info --operation.show_features=true --push_to_hub=false'
+
+[tasks.rollout-view]
+description = "Review one local rollout episode in Rerun (no hardware access)"
+args = [{ arg = "episode", default = "0" }]
+cmd = 'lerobot-dataset-viz --repo-id "$ROLLOUT_DATASET_REPO_ID" --root "$HF_LEROBOT_HOME/$ROLLOUT_DATASET_REPO_ID" --episode-index {{ episode }}'
 
 [tasks.train]
 description = "Fresh LoRA training with automatic train-only stats (uses idle eligible GPUs; no robot)"
@@ -80,7 +89,7 @@ cmd = """python -m scripts.rollout --robot.type=ur5e \
   --dataset.repo_id="$ROLLOUT_DATASET_REPO_ID" --dataset.root="$HF_LEROBOT_HOME/$ROLLOUT_DATASET_REPO_ID" \
   --dataset.single_task="$TASK" \
   --dataset.fps=$CONTROL_FPS --dataset.episode_time_s=$ROLLOUT_EPISODE_TIME_S \
-  --dataset.reset_time_s=$RESET_TIME_S --dataset.num_episodes={{ episodes }} \
+  --dataset.num_episodes={{ episodes }} \
   --dataset.push_to_hub=false --dataset.no_stamp=true \
   --return_to_initial_position=false --display_data=false {{ extra }}"""
 

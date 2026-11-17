@@ -436,6 +436,10 @@ def check_assets(preset, root, hash_base=False):
         and info.get("total_frames", 0) > 0,
         "dataset needs finalized episodes and frames",
     )
+    require(
+        type(info.get("fps")) in (int, float) and info["fps"] == 15,
+        "reference-15k requires a 15 Hz dataset; inspect meta/info.json fps",
+    )
     base = Path(root) / flags["policy.pretrained_path"]
     weights = base / "model.safetensors"
     require(

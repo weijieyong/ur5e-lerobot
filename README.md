@@ -15,6 +15,8 @@ tested version ([installation guide](https://pixi.sh/latest/installation/)):
 
 ```sh
 curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=0.83.0 bash
+git clone https://github.com/weijieyong/ur5e-lerobot.git
+cd ur5e-lerobot
 pixi run --locked setup   # installs the environment and creates config/local/machine.env
 pixi run --locked test    # offline; no hardware
 ```

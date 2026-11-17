@@ -140,7 +140,7 @@ class RecordingFeedback:
         self.show(
             f"READY — NOT RECORDING\n{dataset.num_episodes} saved episodes; next dataset episode {self.episode}.\n"
             "Live preview/teleop are active. Return home (h) and reset the scene.\n"
-            "Right / n: START recording | Esc / q / Ctrl+C: exit\n"
+            "Keyboard Right arrow / n: START recording | Esc / q / Ctrl+C: exit\n"
             "Waiting for the operator; no automatic start."
         )
         while True:
@@ -156,7 +156,7 @@ class RecordingFeedback:
         ordinal = self.episode - self.first_episode + 1
         self.show(
             f"RECORDING {ordinal}/{self.cfg.dataset.num_episodes} | dataset episode {self.episode}\n"
-            "Right / n: STOP + SAVE | Left / r: STOP + DISCARD | Esc / q / Ctrl+C: save + exit\n"
+            "Keyboard Right arrow / n: STOP + SAVE | keyboard Left arrow / r: STOP + DISCARD | Esc / q / Ctrl+C: save + exit\n"
             "After saving/discarding, wait in READY to reset and start manually. Do not home while recording."
         )
         upstream.log_say("Recording started", self.cfg.play_sounds)
@@ -228,7 +228,7 @@ class RecordingFeedback:
                             "RECOVERY — NOT RECORDING\n"
                             "Current TCP orientation is outside the bounded tilt range; puck motion is held.\n"
                             "Press h to home with a clear path, or restore posture on the pendant.\n"
-                            "Then Right / n starts only once measured tilt is back in range. Esc exits.\n"
+                            "Then keyboard Right arrow / n starts only once measured tilt is back in range. Esc exits.\n"
                             "Home does not redefine the saved neutral."
                         )
                         recovering = True
