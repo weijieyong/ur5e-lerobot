@@ -1,0 +1,11 @@
+[project]
+name = "lerobot_robot_ur5e"
+version = "0.1.0"
+description = "LeRobot plugin: UR5e + Robotiq 2F-85 / OnRobot RG2 robot and SpaceMouse teleoperator"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,0 +1,86 @@
+[workspace]
+name = "ur5e-lerobot"
+description = "UR5e + Robotiq 2F-85 pi0.5 pick-and-place demo on LeRobot"
+channels = ["conda-forge"]
+platforms = [{ platform = "linux-64", cuda = "12" }]
+
+[dependencies]
+python = "3.12.*"
+lerobot = "==0.7.0"
+lerobot-pi = "==0.7.0"
+lerobot-peft = "==0.7.0"
+lerobot-dataset = "==0.7.0"
+lerobot-training = "==0.7.0"
+lerobot-hardware = "==0.7.0"
+lerobot-viz = "==0.7.0"
+pytorch-gpu = "*"
+hidapi = ">=0.14"
+ruff = ">=0.17.4,<0.18"
+
+[pypi-dependencies]
+ur-rtde = "==1.6.5"
+# PyPI wheel, not conda-forge: the conda package ships no dist metadata, so LeRobot reports it missing.
+pyrealsense2 = "==2.56.5.9235"
+lerobot_robot_ur5e = { path = "src/lerobot_robot_ur5e", editable = true }
+
+[activation]
+scripts = ["scripts/activate.sh"]
+
+# Machine-specific values ($UR5E_IP, $DATASET_REPO_ID, $TASK, ...) come from config/local/machine.env.
+[tasks]
+setup = { cmd = "python -m scripts.setup", description = "Create local config or add missing defaults, preserving existing values; enable the repo pre-commit hook" }
+set-home = { cmd = "python -m scripts.set_robot_reference home", description = "Save measured joints as the home pose (read-only robot query; updates local config)" }
+set-floor = { cmd = "python -m scripts.set_robot_reference floor", description = "Save measured TCP z plus clearance as the floor (read-only robot query; updates local config)" }
+set-boundaries = { cmd = "python -m scripts.set_boundaries", description = "Teach TCP floor and four sides with SpaceMouse (moves robot; Enter captures, Esc cancels, y saves)" }
+set-neutral = { cmd = "python -m scripts.set_robot_reference neutral", description = "Save current TCP orientation as the fixed tilt reference (read-only robot query)" }
+timing = { cmd = "python -m scripts.check_timing", description = "Report timing from the latest robot session log (no hardware access)" }
+test = { cmd = "python -m unittest discover -s tests -v", description = "Offline recording, rollout and environment checks; no hardware access" }
+lint = { cmd = "ruff check .", description = "Correctness lint (ruff.toml); no hardware access" }
+smoke-docker = { cmd = "./scripts/test_clean_env.sh", description = "Fresh-container locked install, CUDA check and offline tests (needs Docker + NVIDIA Container Toolkit; no robot hardware)" }
+hw-check = { cmd = "python -m scripts.hw_check", description = "Read-only check of robot, gripper, cameras and SpaceMouse" }
+calibrate-cameras = { cmd = "python -m scripts.calibrate_cameras", description = "Calibrate both cameras from white-paper patches; confirm y/n before updating machine.env" }
+info = { cmd = "lerobot-edit-dataset --repo_id=\"$DATASET_REPO_ID\" --root=\"$HF_LEROBOT_HOME/$DATASET_REPO_ID\" --operation.type=info --operation.show_features=true", description = "Inspect local dataset counts and feature names (read-only)" }
+teleop = { cmd = "python -m scripts.teleop --robot.type=ur5e --teleop.type=spacemouse --teleop.stop_on_escape=true --fps=$CONTROL_FPS", description = "Drive the arm with the SpaceMouse (Esc or Ctrl+C: stop; h: home; no recording)" }
+
+[tasks.record]
+description = "Manual SpaceMouse recording; moves robot (Right: start/stop+save, Left: discard/retry, Esc: exit; waits in READY)"
+args = [{ arg = "episodes", default = "$RECORD_EPISODES" }, { arg = "extra", default = "" }]
+cmd = """python -m scripts.record --robot.type=ur5e --teleop.type=spacemouse \
+  --dataset.repo_id="$DATASET_REPO_ID" --dataset.root="$HF_LEROBOT_HOME/$DATASET_REPO_ID" --dataset.single_task="$TASK" \
+  --dataset.fps=$CONTROL_FPS \
+  --dataset.num_episodes={{ episodes }} --dataset.push_to_hub=false \
+  --dataset.no_stamp=true --display_data=true {{ extra }}"""
+
+[tasks.view]
+description = "Review one episode of the local dataset in Rerun"
+args = [{ arg = "episode", default = "0" }]
+cmd = "lerobot-dataset-viz --repo-id \"$DATASET_REPO_ID\" --episode-index {{ episode }}"
+
+[tasks.train]
+description = "Fresh LoRA training with automatic train-only stats (uses idle eligible GPUs; no robot)"
+args = [{ arg = "dataset_root" }, { arg = "repo_id" }, { arg = "mode", default = "" }]
+cmd = "python -m scripts.train_lora reference-15k --dataset-root {{ dataset_root }} --repo-id {{ repo_id }} {{ mode }}"
+
+[tasks.train-check]
+description = "CPU native config/base metadata check; stats fit when training starts (no model load or hardware)"
+args = [{ arg = "dataset_root" }, { arg = "repo_id" }]
+cmd = "python -m scripts.train_lora reference-15k --dataset-root {{ dataset_root }} --repo-id {{ repo_id }} --dry-run"
+
+[tasks.rollout]
+description = "Supervised RTC policy rollout; moves robot (READY: n/Right starts, optional t edits; h homes; Right saves; Left discards; Esc exits; no live viewer unless --display_data=true)"
+args = [{ arg = "episodes", default = "$ROLLOUT_EPISODES" }, { arg = "extra", default = "" }]
+env = { PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True" }
+cmd = """python -m scripts.rollout --robot.type=ur5e \
+  --robot.max_joint_step_rad=$ROLLOUT_MAX_JOINT_STEP_RAD \
+  --robot.gripper_speed=$ROLLOUT_GRIPPER_SPEED \
+  --robot.home_speed_rad_s=$ROLLOUT_HOME_SPEED_RAD_S \
+  --policy.path="$ROLLOUT_POLICY_PATH" --policy.num_inference_steps=$ROLLOUT_DENOISE_STEPS --device=cuda \
+  --strategy.type=episodic --strategy.smooth_handover=false --inference.type=rtc \
+  --inference.rtc.execution_horizon=$RTC_EXECUTION_HORIZON --fps=$CONTROL_FPS \
+  --dataset.repo_id="$ROLLOUT_DATASET_REPO_ID" --dataset.root="$HF_LEROBOT_HOME/$ROLLOUT_DATASET_REPO_ID" \
+  --dataset.single_task="$TASK" \
+  --dataset.fps=$CONTROL_FPS --dataset.episode_time_s=$ROLLOUT_EPISODE_TIME_S \
+  --dataset.reset_time_s=$RESET_TIME_S --dataset.num_episodes={{ episodes }} \
+  --dataset.push_to_hub=false --dataset.no_stamp=true \
+  --return_to_initial_position=false --display_data=false {{ extra }}"""
+

@@ -1,0 +1,8 @@
+.pixi/
+__pycache__/
+*.egg-info/
+config/local/
+data/
+outputs/
+hf/
+.cache/

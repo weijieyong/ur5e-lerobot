@@ -1,0 +1,18 @@
+# Only source inputs; never copy host environments, credentials, models or data.
+**
+!pixi.toml
+!pixi.lock
+!ruff.toml
+!src/
+!src/**
+!scripts/
+!scripts/**
+!tests/
+!tests/**
+!config/
+!config/machine.env.example
+!docker/
+!docker/smoke/
+!docker/smoke/**
+**/__pycache__
+**/*.egg-info

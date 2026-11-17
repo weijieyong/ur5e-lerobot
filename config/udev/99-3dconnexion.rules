@@ -1,0 +1,3 @@
+# Let logged-in users and the plugdev group read 3Dconnexion SpaceMouse devices via hidraw.
+# Install:  sudo cp config/udev/99-3dconnexion.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="256f", MODE="0660", GROUP="plugdev", TAG+="uaccess"
