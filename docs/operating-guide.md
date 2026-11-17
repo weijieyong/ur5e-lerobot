@@ -98,6 +98,64 @@ preserve private calibration and transfer complete datasets/models separately wi
 hash manifests. Use native Linux storage and enough free space for caches/temp files.
 Run locked installation and setup only as part of an authorized source update.
 
+### First-time bring-up order
+
+Follow these steps in order on a new machine, after `pixi run --locked setup`. The sections
+below describe each command in detail. Steps 6 to 9 save a pose or move the arm, so keep the
+pendant and the emergency stop within reach.
+
+1. Connect the hardware. Plug both cameras into USB 3 ports, plug in the SpaceMouse and
+   connect the PC to the robot controller network. The gripper has no cable to the PC. The
+   PC reaches it through the URCap on the robot: port 63352 for a Robotiq, port 41414 for an
+   RG2. On the pendant, set the active TCP, power the arm on, release the brakes and select
+   Remote Control.
+2. Find the camera serials. This command prints one line per connected RealSense camera, with
+   its model and serial number:
+
+   ```sh
+   pixi run python -c "import pyrealsense2 as rs; [print(d.get_info(rs.camera_info.name), d.get_info(rs.camera_info.serial_number)) for d in rs.context().query_devices()]"
+   ```
+
+   If you cannot tell which camera is which, unplug one and run it again. Close any other
+   program that uses the cameras first.
+3. Edit `config/local/machine.env`. Set `UR5E_IP`, `GRIPPER_TYPE`, `FRONT_CAMERA_SERIAL`
+   (the external camera), `WRIST_CAMERA_SERIAL` (the camera on the gripper), `DATASET_REPO_ID`
+   and `TASK`. Leave the home, neutral, floor and side keys alone. Steps 6 to 8 save measured
+   values for them.
+4. Check the devices. These commands only read from the hardware. They do not command the arm
+   or the gripper:
+
+   ```sh
+   pixi run hw-check --only spacemouse
+   pixi run hw-check --only cameras --preview
+   pixi run hw-check
+   ```
+
+   Confirm that the front and wrist images come from the right cameras and that each
+   SpaceMouse direction matches the description in [Read-only checks](#read-only-checks).
+5. Adjust the camera colour with `pixi run calibrate-cameras`. Hold white paper in front of
+   each camera. The command asks for y or n before it writes to `machine.env`.
+6. Save the home and neutral poses. Move the arm to each pose with the pendant, then run the
+   command. Both only read the robot and write to `machine.env`:
+
+   ```sh
+   pixi run set-home
+   pixi run set-neutral
+   ```
+
+7. Save the floor with `pixi run set-floor` only if you will skip step 8. Hold the
+   fingertips just above the table first, then return the arm to home.
+8. Teach the workspace boundaries with `pixi run set-boundaries`. This moves the arm with the
+   SpaceMouse and captures the floor, left, right, front and back faces. It replaces
+   `UR5E_Z_MIN_M`, so the floor from step 7 does not apply once you save here.
+9. Run the first motion test with `pixi run teleop`. Connecting uploads the control script and
+   may activate the gripper. Set the low speeds listed under
+   [Motion and recovery](#motion-and-recovery) before you start.
+10. Record with `pixi run record`, then review the data with `pixi run info` and
+    `pixi run view 0`. Training and rollout are in [training and deployment](training.md).
+
+Restart any running command after you change `machine.env` or save a pose.
+
 ## Robot preparation and teleoperation
 
 Run interactive commands from the robot PC's **X11 desktop**, with an operator
@@ -107,6 +165,19 @@ camera identities, task and output dataset in private config. On the pendant,
 confirm the active TCP/tool definition, power/brakes and controller safety settings;
 select Remote Control before software motion. Keep fingers clear for gripper activation.
 Never run teleop, recording, rollout or boundary teaching concurrently against the arm.
+
+### Camera serial numbers
+
+With both cameras plugged in and no other program using them, list them:
+
+```sh
+pixi run lerobot-find-cameras realsense
+```
+
+Each camera prints its model (`Name`) and serial number (`Id`). Put the D455's serial in
+`FRONT_CAMERA_SERIAL` and the D405's in `WRIST_CAMERA_SERIAL` in `config/local/machine.env`.
+The command also saves one frame per camera to `outputs/captured_images/realsense_<serial>.png`;
+use those to tell the cameras apart if both are the same model.
 
 ### Read-only checks
 
