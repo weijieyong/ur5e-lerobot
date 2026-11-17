@@ -20,7 +20,7 @@ Other Linux distributions, ARM, macOS and Windows/WSL have not been validated.
 | Requirement | What to provide on the host |
 | --- | --- |
 | OS | Ubuntu 22.04 x86-64 (robot PC and training machine: full workflow); Ubuntu 24.04 install and offline tests in the clean container. |
-| Pixi and source | Pixi 0.83.0 on PATH and a checkout including `pixi.lock`. Git is needed to clone, not to run the tasks. |
+| Pixi and source | Pixi 0.83.0 on PATH and a checkout including `pixi.lock`. Git is needed to clone and run `setup`. |
 | NVIDIA GPU/driver | A driver that supports the GPU and the locked CUDA 12.9 runtime. The clean-container test passed on RTX 5080 / driver 595.99.02; this is a tested combination, not a minimum driver version. |
 | GPU capacity | pi0.5 training/inference uses bfloat16 and needs enough VRAM for the chosen workload. The small CUDA test establishes neither policy fit nor a minimum VRAM/RAM requirement. |
 | Network and certificates | Internet access with working HTTPS trust to download Pixi and packages on first setup. Model downloads are separate; an installed environment with cached assets can be used offline. |
@@ -37,6 +37,9 @@ pixi run --locked test
 ```
 
 ### Additional requirements for live use
+
+Before hardware checks, confirm the [pendant prerequisite](#pendant-prerequisite)
+and complete the configuration step in [First-time bring-up order](#first-time-bring-up-order).
 
 - **Training/inference:** the intended datasets, base model/checkpoint, processor
   files and tokenizer assets must be downloaded or copied separately. The example
@@ -71,7 +74,9 @@ preparations.
 If Pixi is absent from PATH on the robot PC, use `~/.pixi/bin/pixi`.
 `setup` creates `config/local/machine.env` from
 [the example](../config/machine.env.example), or adds missing defaults while preserving
-existing values/comments. Edit that private file for the machine; never replace
+existing values/comments. Pulling and rerunning setup does not migrate existing values:
+for example, an old 30-degree tilt limit stays 30 until you edit it to 10.
+Edit that private file for the machine; never replace
 an existing calibration with example values. Camera colour controls and the TCP
 floor in the example are placeholders and need measurement/review before live use.
 Restart camera/robot commands after configuration changes.
@@ -108,9 +113,7 @@ pendant and the emergency stop within reach.
    connect the PC to the robot controller network. The gripper has no cable to the PC. The
    PC reaches it through the URCap on the robot: port 63352 for a Robotiq, port 41414 for an
    RG2.
-2. Set up the pendant. Install the URCap for your gripper, set the TCP and measure the payload,
-   as described in [Pendant and gripper setup](#pendant-and-gripper-setup). Then power the
-   arm on, release the brakes and select Remote Control.
+2. Confirm the [pendant prerequisite](#pendant-prerequisite) and select Remote Control.
 3. Find the camera serials with `pixi run lerobot-find-cameras realsense`. See
    [Camera serial numbers](#camera-serial-numbers).
 4. Edit `config/local/machine.env`. Set `UR5E_IP`, `GRIPPER_TYPE`, `FRONT_CAMERA_SERIAL`
@@ -147,7 +150,7 @@ pendant and the emergency stop within reach.
 9. Teach the workspace boundaries with `pixi run set-boundaries`. This moves the arm with the
    SpaceMouse and captures the floor, left, right, front and back faces. It replaces
    `UR5E_Z_MIN_M`, so the floor from step 8 does not apply once you save here.
-10. Run the first motion test with `pixi run teleop`. Connecting uploads the control script and
+10. Check teleoperation with `pixi run teleop`. Connecting uploads the control script and
    may activate the gripper. Set the low speeds listed under
    [Motion and recovery](#motion-and-recovery) before you start.
 11. Record with `pixi run record`, then review the data with `pixi run info` and
@@ -160,46 +163,16 @@ Restart any running command after you change `machine.env` or save a pose.
 Run interactive commands from the robot PC's **X11 desktop**, with an operator
 at the robot and the pendant accessible. Connect the controller network, Robotiq
 through its URCap socket setup, both USB cameras and SpaceMouse. Confirm robot IP,
-camera identities, task and output dataset in private config. On the pendant,
-confirm the active TCP/tool definition, power/brakes and controller safety settings;
+camera identities, task and output dataset in private config. Confirm the
+[pendant prerequisite](#pendant-prerequisite), power/brakes and controller safety settings;
 select Remote Control before software motion. Keep fingers clear for gripper activation.
 Never run teleop, recording, rollout or boundary teaching concurrently against the arm.
 
-### Pendant and gripper setup
+### Pendant prerequisite
 
-Do this once per robot, on the pendant, before the first software connection. This repo
-does not ship the URCaps. Follow the vendor manual for your PolyScope version if the
-steps below differ from what you see.
-
-1. Install the URCap for your gripper. Copy the `.urcap` file to a USB stick and plug it
-   into the pendant. Open Settings, then System, then URCaps. Tap `+`, pick the file and
-   restart when asked.
-
-   | `GRIPPER_TYPE` | URCap source | After the restart |
-   | --- | --- | --- |
-   | `robotiq` | The 2F-85 gripper software for Universal Robots, from [support.robotiq.com](https://support.robotiq.com). | Open Installation, then URCaps, then the Robotiq gripper tab. Activate the gripper and confirm it reports ready. |
-   | `onrobot_rg2` | The OnRobot URCap, from the OnRobot website. Remove older OnRobot URCap versions first. Current versions need PolyScope 5.4 or later. | Open Installation, then URCaps, then the OnRobot entry. Confirm it detects the RG2. |
-
-   An RG2 gets power through the tool flange, so connect it to the tool connector with
-   the OnRobot cable and keep the arm powered on. OnRobot warns never to connect the
-   Quick Changer for I/O to an e-Series tool connector.
-2. Set the TCP. Open Installation, then General, then TCP. Put the TCP at the point
-   between the fingertips: measure its offset from the tool flange along the tool Z axis
-   and leave the rotation at zero. `set-floor`, `set-boundaries` and the SpaceMouse
-   guards all use this TCP, so measure it carefully. If you change the TCP later, save
-   the floor and boundaries again.
-3. Set the payload with the pendant. Mount the gripper, its mounting plate and the wrist
-   camera first. Open Installation, then General, then Payload, and start the payload
-   measurement (the button is named Measure on current PolyScope versions). The pendant
-   asks you to jog the arm to a few poses with different tool orientations, measures the
-   load at each and fills in the mass and centre of gravity. Follow its on-screen prompts
-   and keep the workspace clear while it runs. Check that the result is close to the
-   gripper datasheet mass plus the mount and camera. A wrong payload makes freedrive
-   drift and can trigger protective stops. Measure again after you change anything
-   mounted on the flange.
-4. Select Remote Control and run `pixi run hw-check --only robot`, then
-   `pixi run hw-check --only gripper`. A refused connection to
-   port 63352 or 41414 usually means the URCap is missing or not active.
+The robot must already be activated, with the intended TCP, payload, tool and vendor
+URCap configured per the UR and gripper-vendor instructions. Recheck floor/workspace
+references after changing the TCP or mounted tool.
 
 ### Camera serial numbers
 
@@ -232,7 +205,8 @@ in rad/s. With operator yaw zero, +vx means base +X and +vz means up. The defaul
 HID map (for a SpaceMouse Compact) is `+0 -1 -2 +3 -4 -5`; verify physical directions for the actual setup.
 Adjust `SPACEMOUSE_AXIS_MAP` (six distinct signed channels),
 `SPACEMOUSE_OPERATOR_YAW_DEG` and close/open button assignments as needed, then
-recheck. Left defaults to close, right to open during teleoperation.
+recheck. The **SpaceMouse buttons** default to left = close, right = open during teleoperation.
+Recording START/save/discard uses the **keyboard arrow keys**, not these buttons.
 
 ### TCP, floor, home and neutral
 
@@ -275,6 +249,8 @@ rejected commands or cleanup errors before collection.
 `R = Rz(yaw) Ry(pitch) Rx(roll) R_neutral`. This is not a total-tilt cone.
 `xyz_yaw` locks roll/pitch; `full` removes tilt limits.
 `pixi run hw-check --only robot` reports neutral-relative angles without motion.
+In bounded mode, check those angles at the saved home pose: its roll and pitch must
+fit the configured limit. Home and neutral are separate references.
 
 An outside-range posture holds puck targets instead of snapping to neutral.
 RECOVERY permits h with a clear path or pendant repositioning. Teleop resumes
@@ -321,6 +297,10 @@ recovery from an outside start remain possible.
 Close other camera users, then run `pixi run calibrate-cameras` on the X11 desktop.
 Put white paper in each view, select a patch and press Enter; Esc cancels selection.
 The helper recommends exposure/gain/white balance and shows both final tuned images.
+Exposure ceilings default to the current front/wrist exposure settings in `machine.env`
+(or the live value if empty). Override them with `--front-max-exposure` and
+`--wrist-max-exposure`, for example `pixi run calibrate-cameras --front-max-exposure VALUE`.
+Use each sensor's reported range; native units vary by sensor. No calibrated ceiling is supplied.
 Default is no write; explicit y/yes saves six controls, preserves other settings,
 backs up config and refuses concurrent edits. Review brightness/clipping warnings
 before accepting; acceptance is not independent calibration validation.
@@ -338,15 +318,16 @@ pixi run record 3
 
 | Phase/input | Result |
 |---|---|
-| READY | Live preview and teleop; no frames saved. Reset/home, then Right/n starts. |
-| RECORDING: Right/n | Stop and save; wait for READY before resetting. |
-| RECORDING: Left/r | Discard attempt; READY waits at the same episode number. |
+| READY | Live preview and teleop; no frames saved. Reset/home, then keyboard Right arrow/n starts. |
+| RECORDING: keyboard Right arrow/n | Stop and save; wait for READY before resetting. |
+| RECORDING: keyboard Left arrow/r | Discard attempt; READY waits at the same episode number. |
 | RECORDING: Esc/q or first Ctrl+C | Save buffered attempt and exit; review a partial last episode. |
 | READY: Esc/q/Ctrl+C | Exit without an empty episode. |
 | SAVING | Wait for finalization; queued inputs are cleared before READY. |
 
 There are no automatic starts or manual-recording phase timers.
-`RECORD_EPISODE_TIME_S` and `RESET_TIME_S` do not time the manual recording phases. The terminal/Rerun show phase and episode; banner colours
+READY waits indefinitely in recording and rollout; `RESET_TIME_S` is unused by these wrappers.
+The terminal/Rerun show phase and episode; banner colours
 are blue READY, orange RECORDING, green SAVING and red DISCARDING. After the
 requested saved count the command finalizes/exits. Its owned viewer closes on
 exit; older independent viewer windows can be closed manually. A second Ctrl+C
@@ -355,8 +336,8 @@ can force interruption, so allow normal saving/cleanup to finish.
 `pixi run record` defaults to `RECORD_EPISODES`. Existing datasets require
 `pixi run record 1 --resume=true`; the count is **additional** demonstrations.
 Use a fresh dataset name for a fresh collection. Review/reject unusable episodes
-with native LeRobot tools and replace as needed; a saved attempt is not automatically
-an accepted demonstration.
+with the [filtered-copy workflow](training.md#filter-saved-episodes) and replace as needed.
+A saved attempt is not automatically an accepted demonstration.
 
 ```sh
 pixi run timing
@@ -385,7 +366,10 @@ repeated startup failures need investigation.
 
 ## Supervised RTC rollout
 
-Deploy using [training and deployment](training.md) first.
+Deploy using [training and deployment](training.md) first. Before motion, compare the
+training dataset's `meta/info.json` `fps` with `CONTROL_FPS` (used for control and saved rollout FPS):
+all must be 15 for this recipe. Keep `--interpolation_multiplier=1`. Training checks dataset
+FPS; rollout does not infer or enforce the checkpoint's collection rate.
 
 Stop teleop/recording and use a focused POSIX terminal with usable stdin/termios.
 Place the robot at the demonstrated home joint configuration with a clear
@@ -406,7 +390,8 @@ as its example GPU; LeRobot's pi0.5 page gives no figure. Use a 24 GB-class card
 here, rollout peaks at about 8.9 GiB, so a 10 GB RTX 3080 runs it with little headroom: the
 live Rerun viewer (about 0.3 GiB) is enough to run out of memory. Rollout therefore runs
 without the live viewer and sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`;
-review episodes afterwards with `pixi run view`. With spare GPU memory, opt in with
+review episodes afterwards with `pixi run rollout-info` and `pixi run rollout-view 0`.
+With spare GPU memory, opt in with
 `pixi run rollout 1 --display_data=true`. A command that fails after creating its dataset leaves a stub folder, and
 the next run stops with `FileExistsError`: delete it only after its `meta/info.json` shows
 `total_episodes` 0, or choose a fresh name.
@@ -478,7 +463,7 @@ verified current machine values:
 Collection defaults to a 0.05-rad joint target cap; rollout defaults to 0.01 rad.
 These are offsets from freshly measured joints, not velocity limits or a fixed
 physical-speed ratio. Clipping can alter tracking/grasp timing. Keep control/data
-FPS at 15 and interpolation multiplier 1; do not change FPS to slow playback.
+FPS at 15 and `--interpolation_multiplier=1`; do not change FPS to slow playback.
 Servo gain/lookahead affect controller response. Chunk size, non-RTC action steps
 and RTC execution horizon have different meanings; unequal values are not a bug.
 SpaceMouse floor/side/tilt guards do not constrain policy joint actions.

@@ -53,7 +53,12 @@ def fake_assets(root, preset):
     (data / "meta").mkdir(parents=True)
     (data / "meta" / "info.json").write_text(
         json.dumps(
-            {"codebase_version": "v3.0", "total_episodes": 5, "total_frames": 260}
+            {
+                "codebase_version": "v3.0",
+                "total_episodes": 5,
+                "total_frames": 260,
+                "fps": 15,
+            }
         )
     )
     base = root / flags["policy.pretrained_path"]
@@ -383,6 +388,18 @@ class PlanAndAssetTests(unittest.TestCase):
         (run / "run.json").write_text(json.dumps(record))
         with self.assertRaisesRegex(tl.TrainingConfigError, "native argv"):
             load_spec(run / "run.json", self.root, self.presets)
+
+    def test_training_rejects_mismatched_or_missing_collection_fps(self):
+        info_path = (
+            self.root / self.preset["native_flags"]["dataset.root"] / "meta/info.json"
+        )
+        info = json.loads(info_path.read_text())
+        for fps in (30, 0, None, "15", True):
+            with self.subTest(fps=fps):
+                info["fps"] = fps
+                info_path.write_text(json.dumps(info))
+                with self.assertRaisesRegex(tl.TrainingConfigError, "15 Hz"):
+                    tl.check_assets(self.preset, self.root)
 
     def test_unapproved_assets_are_rejected(self):
         tl.check_assets(self.preset, self.root, hash_base=True)

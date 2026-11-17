@@ -7,9 +7,11 @@ never downloads anything; fetch the base model and tokenizer once, below.
 
 ## Model downloads
 
-Training needs two Hugging Face assets in the project cache (`hf/hub`, set by `HF_HOME`
-in `config/local/machine.env`). Only the training machine needs them: the robot PC gets
-the tokenizer inside the copied checkpoint.
+`HF_HOME` in `config/local/machine.env` controls the download/auth cache and defaults
+to `$PIXI_PROJECT_ROOT/hf`. The launcher always reads `$PIXI_PROJECT_ROOT/hf/hub`;
+changing `HF_HOME` does not relocate the recipe's base snapshot or training cache.
+Download them on the training machine; the robot PC uses the deployment copies
+described below.
 
 | Asset | Repo | Access |
 | --- | --- | --- |
@@ -24,17 +26,17 @@ For the first download, set `HF_HUB_OFFLINE=0` in `config/local/machine.env`; it
 every `pixi run`, so a `HF_HUB_OFFLINE=0 pixi run ...` prefix has no effect.
 
 Log in with a Hugging Face [access token](https://huggingface.co/settings/tokens) (read scope).
-The token is saved under the project's `hf/` folder, which is git-ignored:
+With the default `HF_HOME`, the token is saved under the project's git-ignored `hf/` folder:
 
 ```sh
 pixi run hf auth login
 ```
 
-Download both assets:
+From the project root, download both assets explicitly into the training cache:
 
 ```sh
-pixi run hf download lerobot/pi05_base --revision 22c30e5b34f9e7ab738b1b34fc2fc5ecfe2d28f0
-pixi run hf download google/paligemma-3b-pt-224 \
+pixi run hf download lerobot/pi05_base --cache-dir ./hf/hub --revision 22c30e5b34f9e7ab738b1b34fc2fc5ecfe2d28f0
+pixi run hf download google/paligemma-3b-pt-224 --cache-dir ./hf/hub \
   config.json tokenizer.json tokenizer.model tokenizer_config.json \
   special_tokens_map.json added_tokens.json
 ```
@@ -46,26 +48,46 @@ pixi run hf download google/paligemma-3b-pt-224 \
 The revision is the snapshot `config/training/reference-15k.recipe.json` expects;
 `pixi run train-check` confirms the base snapshot is in place.
 
-## Train directly from finalized recordings
+## Filter saved episodes
 
-Review/reject unusable episodes using native dataset tools, finalize the recording,
-and keep it immutable for the run. No separate preparation, dataset copy or stats
-file is required. The trainer fits normalization automatically from the native
-training split before policy and processor construction. Raw actions stay absolute.
-
-Example commands below use an illustrative newly recorded dataset identity; they
-are instructions, not claims that this real-data run was executed:
+Inspect the original dataset, then write a filtered copy with LeRobot 0.7.0's
+`delete_episodes` operation. Example: reject episode 1 from `local/new-recording`.
+Substitute your dataset identity, root and rejected indices. Start with a fresh output
+path; keep the source unchanged. Filtering renumbers the retained episodes.
 
 ```sh
-pixi run train-check data/local/new-recording local/new-recording
-pixi run train data/local/new-recording local/new-recording --smoke
-pixi run train data/local/new-recording local/new-recording
+pixi run lerobot-edit-dataset --repo_id=local/new-recording --root=./data/local/new-recording --operation.type=info --operation.show_features=true --push_to_hub=false
+pixi run lerobot-dataset-viz --repo-id local/new-recording --root ./data/local/new-recording --episode-index 1
+# Destination must not exist. This writes a copy, leaving the original intact.
+test ! -e ./data/local/new-recording-filtered && pixi run lerobot-edit-dataset \
+  --repo_id=local/new-recording --root=./data/local/new-recording \
+  --new_repo_id=local/new-recording-filtered --new_root=./data/local/new-recording-filtered \
+  --operation.type=delete_episodes --operation.episode_indices='[1]' --push_to_hub=false
+pixi run lerobot-edit-dataset --repo_id=local/new-recording-filtered --root=./data/local/new-recording-filtered --operation.type=info --operation.show_features=true --push_to_hub=false
+pixi run lerobot-dataset-viz --repo-id local/new-recording-filtered --root ./data/local/new-recording-filtered --episode-index 0
 ```
 
-Equivalent Python CLI:
+Record rejected original indices and reasons with the copy. Keep at least two usable
+episodes for the train/development split. `info`/`view` select the configured demonstration
+dataset; the explicit arguments above select the filtered copy regardless of config.
+Keep `HF_HUB_OFFLINE=1` during inspection/filtering.
+
+## Train directly from finalized recordings
+
+Train from the reviewed copy and keep it immutable for the run. No separate stats file
+is required. The trainer fits normalization from the native training split before
+policy and processor construction. Raw actions stay absolute.
 
 ```sh
-python -m scripts.train_lora reference-15k --dataset-root data/local/new-recording --repo-id local/new-recording --dry-run
+pixi run train-check data/local/new-recording-filtered local/new-recording-filtered
+pixi run train data/local/new-recording-filtered local/new-recording-filtered --smoke
+pixi run train data/local/new-recording-filtered local/new-recording-filtered
+```
+
+Equivalent offline config check:
+
+```sh
+python -m scripts.train_lora reference-15k --dataset-root data/local/new-recording-filtered --repo-id local/new-recording-filtered --dry-run
 ```
 
 Dataset root is project-relative. Both dataset inputs are explicit; the one
@@ -75,7 +97,9 @@ The supported route is local, single-task, fresh-base training: no streaming or
 resume. Native splitting holds out the last ceil(episodes × 0.2) episodes **per task**,
 not a random frame sample. Both training and development episodes must exist.
 Use matching six-joint radians plus normalized `gripper.pos` state/action order,
-recorder camera identities and the collection/control rate of 15 Hz.
+recorder camera identities and the collection/control rate of 15 Hz. `train-check` and
+training startup reject a missing or non-15 `fps` in the dataset's `meta/info.json`.
+This checks declared rate, not measured capture timing.
 
 Each rank fits independently from actual `train.hf_dataset` numeric columns.
 State quantiles use all training states; action quantiles use native complete
@@ -140,7 +164,12 @@ Ensure base config/processor assets referenced by the copied metadata are presen
 locally and compatible, never substituted from another run.
 
 Set private `ROLLOUT_POLICY_PATH` to the copied directory and keep assets offline.
-Perform a strict real-model load and recorded-input RTC check on the destination
-before supervised robot use. The runtime loader remains strict and unchanged;
-metadata inspection or synthetic tests do not establish successful reload.
-An arbitrary path-string substitution is not sufficient deployment verification.
+Use absolute paths, `./` paths or nested local paths such as
+`outputs/deploy/pretrained_model`; `outputs/` is reserved for local deployments.
+Missing local paths fail before Hub config resolution. Other valid Hub ID strings
+(`namespace/name` or bare repo names) retain upstream loading; prefix with `./` to
+mean local.
+
+Perform a strict real-model reload and recorded-input RTC qualification on the destination
+before supervised robot use. Metadata inspection or synthetic tests do not establish
+successful reload or RTC qualification.

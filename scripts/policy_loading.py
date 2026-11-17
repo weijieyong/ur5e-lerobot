@@ -2,10 +2,33 @@
 
 from pathlib import Path
 
+from huggingface_hub.utils import HFValidationError, validate_repo_id
 from peft import PeftConfig, PeftModel
 from safetensors.torch import load_file
 
 from lerobot.policies.pi05.modeling_pi05 import PI05Policy
+
+
+def local_checkpoint_path(value: str | Path) -> Path | None:
+    """Validate local directories; only strings may designate upstream Hub IDs.
+
+    Reserve outputs/ for deployments. Other ambiguous strings retain upstream
+    behavior; prefix them with ./ to request local loading. Path objects always
+    mean local paths, since Path removes an explicit ./ prefix.
+    """
+    checkpoint = Path(value)
+    hub_id = False
+    if isinstance(value, str):
+        try:
+            validate_repo_id(value)
+            hub_id = not value.startswith("outputs/")
+        except HFValidationError:
+            pass
+    if not checkpoint.exists() and hub_id:
+        return None
+    if not checkpoint.is_dir():
+        raise FileNotFoundError(f"Policy checkpoint directory is missing: {checkpoint}")
+    return checkpoint
 
 
 def load_local_pi05_adapter(config):
@@ -38,16 +61,8 @@ def load_local_pi05_adapter(config):
 
 def load_rollout_policy(config, fallback):
     if config.type == "pi05" and config.use_peft and config.pretrained_path is not None:
-        checkpoint = Path(config.pretrained_path)
-        if (
-            checkpoint.is_absolute()
-            or checkpoint.exists()
-            or str(config.pretrained_path).startswith(".")
-        ):
-            if not checkpoint.is_dir():
-                raise FileNotFoundError(
-                    f"PI05 adapter checkpoint directory is missing: {checkpoint}"
-                )
+        checkpoint = local_checkpoint_path(config.pretrained_path)
+        if checkpoint is not None:
             if not (checkpoint / "adapter_config.json").is_file():
                 raise FileNotFoundError(
                     f"PI05 adapter configuration is missing: {checkpoint / 'adapter_config.json'}"

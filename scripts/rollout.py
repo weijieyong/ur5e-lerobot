@@ -4,6 +4,7 @@ import sys
 import contextlib
 import os
 import math
+from dataclasses import dataclass
 from types import SimpleNamespace
 import time
 
@@ -12,9 +13,22 @@ from lerobot.scripts import lerobot_rollout as upstream
 from lerobot.rollout.strategies.episodic import EpisodicStrategy as NativeStrategy
 from lerobot.rollout import context as rollout_context
 from lerobot.processor import bind_relative_anchor as native_bind_relative_anchor
-from scripts.policy_loading import load_rollout_policy
+from scripts.policy_loading import load_rollout_policy, local_checkpoint_path
 from scripts.record import RecordingFeedback, StoppedBeforeStart
 from scripts.rollout_input import RolloutInput, RolloutTerminal, preflight
+
+
+@dataclass
+class RolloutConfig(upstream.RolloutConfig):
+    def __post_init__(self):
+        # Native parser.get_path_arg handles CLI precedence and extracted YAML/JSON
+        # paths. Check before native __post_init__ can resolve a missing path on Hub.
+        path = parser.get_path_arg("policy")
+        if path is None and self.policy is not None:
+            path = self.policy.pretrained_path
+        if path is not None:
+            local_checkpoint_path(path)
+        super().__post_init__()
 
 
 class ManualEpisodicStrategy(NativeStrategy):
@@ -310,7 +324,7 @@ def bind_relative_anchor(policy, pipeline):
 
 
 @parser.wrap()
-def rollout(cfg: upstream.RolloutConfig):
+def rollout(cfg: RolloutConfig):
     return run_rollout(cfg)
 
 
