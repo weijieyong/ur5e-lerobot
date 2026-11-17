@@ -63,6 +63,8 @@ Clean installation, GPU training/save/strict reload and supervised physical
 qualification remain separate acceptance gates for each deployment.
 
 `pixi run lint` and `pixi run test` are offline checks; neither touches hardware.
+The suite covers safety gates, recording integrity, configuration preservation and training/rollout
+integration, including RTC prediction and runtime contracts against the pinned LeRobot version.
 
 ## License
 

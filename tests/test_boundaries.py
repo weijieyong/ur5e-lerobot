@@ -4,6 +4,7 @@ import contextlib
 import io
 import os
 from pathlib import Path
+import shlex
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -130,14 +131,15 @@ class BoundaryTests(unittest.TestCase):
             command.main()
             text = s.config.read_text()
             self.assertIn('KEEP="untouched"', text)
-            for line in [
-                "UR5E_Z_MIN_M=0.060000",
-                "UR5E_Y_MAX_M=0.390000",
-                "UR5E_Y_MIN_M=-0.290000",
-                "UR5E_X_MAX_M=0.490000",
-                "UR5E_X_MIN_M=-0.390000",
-            ]:
-                self.assertIn(line, text)
+            values = dict(token.split("=", 1) for token in shlex.split(text, comments=True))
+            for key, expected in {
+                "UR5E_Z_MIN_M": 0.06,
+                "UR5E_Y_MAX_M": 0.39,
+                "UR5E_Y_MIN_M": -0.29,
+                "UR5E_X_MAX_M": 0.49,
+                "UR5E_X_MIN_M": -0.39,
+            }.items():
+                self.assertAlmostEqual(float(values[key]), expected, places=6)
             self.assertEqual(text.count("UR5E_Z_MIN_M="), 1)
             backups = list(s.config.parent.glob("machine.env.before-boundaries-*"))
             self.assertEqual(len(backups), 1)

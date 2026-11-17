@@ -1,5 +1,6 @@
 """Read-only reference capture: units and preservation of the machine config."""
 
+import shlex
 import contextlib
 import io
 import math
@@ -46,13 +47,17 @@ class ReferenceTests(unittest.TestCase):
                             "scripts.set_robot_reference", run_name="__main__"
                         )
             text = config.read_text()
+            values = dict(token.split("=", 1) for token in shlex.split(text, comments=True))
             self.assertIn('KEEP="untouched"', text)
-            self.assertIn(
-                'UR5E_HOME_JOINTS_DEG="0.000000 90.000000 -90.000000 180.000000 0.000000 -180.000000"',
-                text,
+            self.assertEqual(
+                [float(value) for value in values["UR5E_HOME_JOINTS_DEG"].split()],
+                [0, 90, -90, 180, 0, -180],
             )
-            self.assertIn("UR5E_Z_MIN_M=0.244000", text)
-            self.assertIn('SPACEMOUSE_NEUTRAL_ROTVEC="0.2 -0.3 3"', text)
+            self.assertAlmostEqual(float(values["UR5E_Z_MIN_M"]), 0.244, places=6)
+            self.assertEqual(
+                [float(value) for value in values["SPACEMOUSE_NEUTRAL_ROTVEC"].split()],
+                [0.2, -0.3, 3.0],
+            )
             self.assertEqual(text.count("UR5E_Z_MIN_M="), 1)
 
     def test_invalid_reference_measurement_does_not_change_config(self):

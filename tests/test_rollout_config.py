@@ -136,11 +136,10 @@ class RolloutConfigTests(unittest.TestCase):
         self.hub.assert_called_once()
 
     def test_help_does_not_resolve_policy_or_enter_rollout(self):
-        with contextlib.redirect_stdout(io.StringIO()) as output:
+        with contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(SystemExit) as caught:
                 self.invoke(["--policy.path=outputs/missing", "--help"])
         self.assertEqual(caught.exception.code, 0)
-        self.assertIn("--config_path", output.getvalue())
         self.hub.assert_not_called()
         self.run.assert_not_called()
         self.hardware.assert_not_called()

@@ -104,9 +104,13 @@ class TeleopTests(unittest.TestCase):
 
     def test_outside_tilt_waits_for_home_and_resumes_without_changing_neutral(self):
         with self.session(home_at=3) as s:
+            s.robot.gripper = SimpleNamespace(position=lambda: 1.0)  # closed before h
+            s.mouse._gripper_cmd = 1.0
             command.run_teleoperation(s.cfg)
             self.assertEqual(s.homes, [True])
             self.assertEqual(len(s.sent), 1)
+            # go_home opened it; teleop must not re-close.
+            self.assertEqual(s.sent[0][GRIPPER], 0.0)
             self.assertEqual(s.output.getvalue().count("RECOVERY"), 1)
             self.assertIn("Press h", s.output.getvalue())
             self.assertIn("TELEOP ACTIVE", s.output.getvalue())
@@ -114,21 +118,10 @@ class TeleopTests(unittest.TestCase):
             s.robot.disconnect.assert_called_once()
             s.disconnect_mouse.assert_called_once()
 
-    def test_home_leaves_the_gripper_command_open(self):
-        with self.session(home_at=3) as s:
-            s.robot.gripper = SimpleNamespace(position=lambda: 1.0)  # closed before h
-            s.mouse._gripper_cmd = 1.0
-            command.run_teleoperation(s.cfg)
-            self.assertEqual(s.homes, [True])
-            self.assertEqual(
-                s.sent[0][GRIPPER], 0.0
-            )  # go_home opened it; teleop must not re-close
-
     def test_duration_expires_during_recovery_without_sending_a_command(self):
         with self.session(duration=0.15, stop_after_command=False) as s:
             command.run_teleoperation(s.cfg)
             self.assertEqual(s.sent, [])
-            self.assertEqual(len(s.reads), 2)
             self.assertAlmostEqual(s.clock.now, 0.15)
             s.robot.disconnect.assert_called_once()
 

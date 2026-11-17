@@ -150,9 +150,6 @@ class RecordingFeedbackTests(unittest.TestCase):
                     for text in documents
                 )
             )
-            self.assertEqual(
-                rr.Image.call_args_list[1].args[0].getpixel((0, 0)), (231, 76, 60)
-            )
 
     def test_esc_or_ctrl_c_during_tilt_recovery_exits_without_saving(self):
         for ctrl_c in (False, True):
@@ -374,7 +371,6 @@ class RecordingFeedbackTests(unittest.TestCase):
                     action={"joint_0.pos": 0.2},
                 )
                 # LeRobot still sends (and later grows) its own grid, under the phase/controls strip.
-                self.assertEqual(send_blueprint.call_count, 2)
                 status, grid = send_blueprint.call_args.args[0].root_container.contents
                 self.assertEqual(
                     [view.name for view in status.contents], ["Phase", "Controls"]

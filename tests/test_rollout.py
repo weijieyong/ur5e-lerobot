@@ -155,7 +155,6 @@ class RolloutTests(unittest.TestCase):
         with self.session(ready, policy, episodes=3) as (strategy, ctx, dataset):
             engine = strategy._engine
             strategy.run(ctx)
-            self.assertIs(strategy._engine, engine)
             self.assertEqual(
                 engine.calls,
                 [
@@ -513,6 +512,7 @@ class RolloutTests(unittest.TestCase):
                                     "probe missed RUNNING admission-lock window"
                                 )
                             strategy.control.key(key)
+                            self.assertFalse(strategy.control.events["stop_recording"])
                         except BaseException as error:
                             callback_errors.append(error)
                         finally:

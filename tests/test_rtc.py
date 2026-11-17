@@ -14,44 +14,9 @@ from lerobot.inference.contracts import (
 from lerobot.inference.execution import ChunkRuntime
 from lerobot.inference.prediction import predict_chunk
 from lerobot.policies.chunk import ChunkPolicySpec
-from lerobot.policies.rtc.action_queue import ActionQueue
-from lerobot.policies.rtc.configuration_rtc import RTCConfig
 
 
 class RTCQueueTests(unittest.TestCase):
-    def test_startup_keeps_first_action_despite_elapsed_inference_time(self):
-        self.check_merge(consumed=0)
-
-    def test_elapsed_estimate_cannot_skip_beyond_consumed_actions(self):
-        self.check_merge(consumed=2)
-
-    def check_merge(self, consumed):
-        for snapshot_api in (False, True):
-            with self.subTest(snapshot_api=snapshot_api, consumed=consumed):
-                queue = ActionQueue(RTCConfig(enabled=True))
-                original = torch.arange(10, dtype=torch.float32).reshape(10, 1)
-                processed = original + 100
-                if consumed:
-                    queue.merge(original, processed, real_delay=0)
-                snapshot = queue.snapshot()
-                index = queue.get_action_index()
-                for step in range(consumed):
-                    torch.testing.assert_close(queue.get(), processed[step])
-                kwargs = (
-                    {"snapshot": snapshot}
-                    if snapshot_api
-                    else {"action_index_before_inference": index}
-                )
-                self.assertTrue(
-                    queue.merge(original, processed, real_delay=5, **kwargs)
-                )
-                self.assertEqual(queue.qsize(), 10 - consumed)
-                torch.testing.assert_close(queue.get_left_over(), original[consumed:])
-                torch.testing.assert_close(
-                    queue.get_processed_left_over(), processed[consumed:]
-                )
-                torch.testing.assert_close(queue.get(), processed[consumed])
-
     def test_native_prediction_pads_prefix_with_last_action_and_unwraps_output(self):
         calls = []
         actions = torch.ones(1, 4, 2)
@@ -115,6 +80,8 @@ class RTCQueueTests(unittest.TestCase):
             )
         )
         torch.testing.assert_close(runtime.queue.get_left_over(), actions)
+        self.assertEqual(runtime.queue.qsize(), len(actions))
+        torch.testing.assert_close(runtime.queue.get_processed_left_over(), actions + 100)
         torch.testing.assert_close(runtime.queue.get(), actions[0] + 100)
         second = runtime.begin(ObservationSnapshot({}, now[0], "pick"))
         self.assertIsNotNone(second)
@@ -133,6 +100,11 @@ class RTCQueueTests(unittest.TestCase):
             )
         )
         self.assertEqual(runtime.last_accept["trimmed_actions"], 1)
+        self.assertEqual(runtime.queue.qsize(), len(actions) - 1)
+        torch.testing.assert_close(runtime.queue.get_left_over(), actions[1:])
+        torch.testing.assert_close(
+            runtime.queue.get_processed_left_over(), actions[1:] + 200
+        )
         torch.testing.assert_close(runtime.queue.get(), actions[1] + 200)
 
 

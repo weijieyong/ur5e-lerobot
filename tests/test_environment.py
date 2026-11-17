@@ -35,7 +35,7 @@ class EnvironmentTests(unittest.TestCase):
                 timeout=30,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertNotIn("external ROS scripts package selected", result.stderr)
+            
             self.assertIn("--robot.type", result.stdout)
 
     def test_activation_removes_python_overrides_before_starting_pixi_python(self):

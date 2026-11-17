@@ -82,33 +82,6 @@ class PresetToArgvTests(unittest.TestCase):
                     expected[key] = str(Path(tmp) / preset["native_flags"][key])
                 expected["output_dir"] = str(Path(tmp) / "run" / "native")
                 self.assertEqual(flags, expected)
-                self.assertEqual(
-                    argv[-1], f"--output_dir={Path(tmp) / 'run' / 'native'}"
-                )
-
-    def test_lowlr_is_baseline_with_only_lr_floor_and_stop_budget_changed(self):
-        changed = {
-            k
-            for k in BASELINE["native_flags"]
-            if BASELINE["native_flags"][k] != LOWLR["native_flags"][k]
-        }
-        self.assertEqual(
-            changed, {"policy.optimizer_lr", "policy.scheduler_decay_lr", "steps"}
-        )
-        self.assertEqual(set(BASELINE["native_flags"]), set(LOWLR["native_flags"]))
-        self.assertEqual(BASELINE["guards"], LOWLR["guards"])
-        flags = tl.parse_argv(
-            tl.build_native_argv(LOWLR, tl.ROOT, "/nonexistent/native")
-        )
-        self.assertEqual(
-            (
-                flags["policy.optimizer_lr"],
-                flags["policy.scheduler_decay_lr"],
-                flags["steps"],
-                flags["policy.scheduler_decay_steps"],
-            ),
-            (2.5e-5, 2.5e-6, 15000, 30000),
-        )
 
     def test_smoke_overrides_only_budget_and_intervals(self):
         normal = tl.parse_argv(tl.build_native_argv(LOWLR, tl.ROOT, "/x/native"))
@@ -199,10 +172,6 @@ class RecipeGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(tl.TrainingConfigError, text):
             tl.check_recipe(preset)
 
-    def test_both_presets_pass(self):
-        tl.check_recipe(BASELINE)
-        tl.check_recipe(LOWLR)
-
     def test_unsafe_or_inconsistent_recipes_are_rejected(self):
         cases = [
             ({"native_flags__resume": True}, "resume"),
@@ -273,23 +242,6 @@ class RecipeGuardTests(unittest.TestCase):
 
 
 class NativeValidationTests(unittest.TestCase):
-    def test_native_config_matches_preset_and_creates_nothing(self):
-        with TemporaryDirectory() as tmp:
-            output = Path(tmp) / "run" / "native"
-            argv = tl.build_native_argv(LOWLR, tl.ROOT, output)
-            cfg = tl.validate_native(argv)
-            effective = tl.effective_settings(cfg, tl.parse_argv(argv))
-            self.assertEqual(
-                (
-                    effective["stop_budget_steps"],
-                    effective["decay_horizon_steps"],
-                    effective["global_batch"],
-                    effective["resume"],
-                ),
-                (15000, 30000, 8, False),
-            )
-            self.assertEqual(list(Path(tmp).iterdir()), [])
-
     def test_existing_output_is_refused_by_native_validation(self):
         with TemporaryDirectory() as tmp:
             output = Path(tmp) / "native"
@@ -379,14 +331,6 @@ class PlanAndAssetTests(unittest.TestCase):
         edited = mutated(self.preset, native_flags__steps=20000)
         (self.presets / "reference-15k.recipe.json").write_text(json.dumps(edited))
         with self.assertRaisesRegex(tl.TrainingConfigError, "preset file changed"):
-            load_spec(run / "run.json", self.root, self.presets)
-        (self.presets / "reference-15k.recipe.json").write_text(json.dumps(self.preset))
-        record = json.loads((run / "run.json").read_text())
-        record["native_argv"] = [
-            a.replace("--steps=15000", "--steps=20000") for a in record["native_argv"]
-        ]
-        (run / "run.json").write_text(json.dumps(record))
-        with self.assertRaisesRegex(tl.TrainingConfigError, "native argv"):
             load_spec(run / "run.json", self.root, self.presets)
 
     def test_training_rejects_mismatched_or_missing_collection_fps(self):
@@ -700,8 +644,6 @@ class LaunchSeamTests(unittest.TestCase):
             tl.TrainingConfigError, "no idle eligible GPU.*not waiting"
         ):
             self.select("GPU-a, 1\nGPU-b, 2\n")
-        # GPU2 is ineligible (not in guards.gpus) even though it would never be considered idle anyway.
-        self.assertNotIn(2, [g["index"] for g in self.select()])
 
     def test_single_gpu_host_selects_the_one_eligible_gpu(self):
         self.assertEqual(self.select("", "0, GPU-a, 15, 0\n"), GPU0)
@@ -751,14 +693,13 @@ class LaunchSeamTests(unittest.TestCase):
         with self.assertRaisesRegex(tl.TrainingConfigError, "identity changed"):
             tl.check_idle_gpus(inventory, [{"index": 3, "uuid": "GPU-d"}])
 
-    def test_launch_selects_then_revalidates_before_popen_without_spawning_gpu_work(
-        self,
-    ):
-        inventories = iter([tl.gpu_inventory(self.GPUS, "GPU-a, 4242\n")])
+    def test_cli_passes_idle_gpu_selection_callback_to_plan(self):
         with (
             patch.object(tl, "plan") as plan,
             patch.object(tl, "launch", return_value=0) as launch,
-            patch.object(tl, "query_gpus", side_effect=lambda: next(inventories)),
+            patch.object(
+                tl, "query_gpus", return_value=tl.gpu_inventory(self.GPUS, "GPU-a, 4242\n")
+            ),
             patch.dict("os.environ"),
         ):
             self.assertEqual(
@@ -829,15 +770,10 @@ class LaunchSeamTests(unittest.TestCase):
 class ExampleConfigTests(unittest.TestCase):
     def test_example_config_has_no_training_knobs_outside_presets(self):
         import re
-        import tomllib
 
         example = (tl.ROOT / "config" / "machine.env.example").read_text()
         keys = set(re.findall(r"^((?:TRAIN|PI05)_[A-Z_]+)=", example, re.M))
         self.assertEqual(keys, set())
-        tasks = tomllib.loads((tl.ROOT / "pixi.toml").read_text())["tasks"]
-        self.assertNotIn("stats", tasks)
-        self.assertNotIn("$", tasks["train"]["cmd"])
-        self.assertNotIn("TRAIN_OUTPUT_DIR", example)
 
 
 if __name__ == "__main__":

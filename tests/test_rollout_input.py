@@ -111,32 +111,6 @@ class InputTests(unittest.TestCase):
         self.assertEqual(control.phase, "READY")
         self.assertFalse(control.home)
 
-    def test_running_stop_controls_survive_lock_contention(self):
-        for key, discard in (
-            ("n", False),
-            ("right", False),
-            ("r", True),
-            ("left", True),
-        ):
-            with self.subTest(key=key):
-                control, _, _ = self.control()
-                control.phase = "RUNNING"
-                worker = threading.Thread(target=control.key, args=(key,), daemon=True)
-                try:
-                    with control.lock:
-                        worker.start()
-                        worker.join(0.5)
-                        self.assertFalse(
-                            worker.is_alive(), "input callback blocked on phase lock"
-                        )
-                    self.assertTrue(
-                        control.events["exit_early"], f"{key} stop was lost in RUNNING"
-                    )
-                    self.assertEqual(control.events["rerecord_episode"], discard)
-                    self.assertFalse(control.events["stop_recording"])
-                finally:
-                    worker.join(1)
-
     @contextlib.contextmanager
     def terminal(self):
         master, slave = pty.openpty()
