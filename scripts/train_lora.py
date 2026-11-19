@@ -233,10 +233,10 @@ def check_recipe(preset):
     gpus = guards.get("gpus")
     require(
         isinstance(gpus, list)
-        and len(gpus) == world
-        and len(set(gpus)) == world
+        and len(gpus) >= world
+        and len(set(gpus)) == len(gpus)
         and all(type(g) is int and g >= 0 for g in gpus),
-        "guards.gpus must list one GPU per rank",
+        "guards.gpus must list distinct eligible GPUs for the requested ranks",
     )
     split = flags.get("dataset.eval_split")
     require(
@@ -287,8 +287,9 @@ def resolve_topology(preset, gpu_count):
         flags["accelerator.gradient_accumulation.steps"],
     )
     require(
-        type(gpu_count) is int and 1 <= gpu_count <= len(guards["gpus"]),
-        f"{gpu_count} GPUs is outside the preset's eligible GPUs {guards['gpus']}",
+        type(gpu_count) is int
+        and 1 <= gpu_count <= min(len(guards["gpus"]), flags["parallelism.dp_replicate"]),
+        f"{gpu_count} GPUs exceeds the recipe's requested ranks or eligible GPUs",
     )
     require(accum == 1, "topology derivation requires gradient accumulation 1")
     require(
@@ -696,8 +697,8 @@ def is_idle(gpu):
     return not gpu["pids"] and gpu["memory_mib"] < 512 and gpu["util_pct"] == 0
 
 
-def select_idle_gpus(inventory, eligible):
-    """All idle GPUs among the preset's eligible indices that exist; refuse if none."""
+def select_idle_gpus(inventory, eligible, limit=None):
+    """Select up to limit idle eligible GPUs in index order; refuse if none."""
     present = [g for g in sorted(eligible) if g in inventory]
     require(present, f"none of the eligible GPUs {sorted(eligible)} is present")
     idle = [
@@ -714,7 +715,7 @@ def select_idle_gpus(inventory, eligible):
         )
         + " (not starting, not waiting)",
     )
-    return idle
+    return idle[:limit]
 
 
 def check_idle_gpus(inventory, selection):
@@ -1051,7 +1052,7 @@ def main(argv=None):
             preset = spec["_preset"]
             spec["topology_candidates"] = {}
             for count in range(
-                1, len(preset["guards"]["gpus"]) + 1
+                1, preset["native_flags"]["parallelism.dp_replicate"] + 1
             ):  # each launch-resolvable plan, on CPU
                 try:
                     argv = build_native_argv(
@@ -1072,7 +1073,9 @@ def main(argv=None):
                 dataset_root=args.dataset_root,
                 repo_id=args.repo_id,
                 select=lambda preset: select_idle_gpus(
-                    query_gpus(), preset["guards"]["gpus"]
+                    query_gpus(),
+                    preset["guards"]["gpus"],
+                    limit=preset["native_flags"]["parallelism.dp_replicate"],
                 ),
             )
     except TrainingConfigError as exc:

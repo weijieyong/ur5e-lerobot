@@ -199,8 +199,8 @@ class RecipeGuardTests(unittest.TestCase):
             ),
             (
                 {
-                    "native_flags__parallelism_DOT_dp_replicate": 1,
-                    "native_flags__batch_size": 8,
+                    "native_flags__parallelism_DOT_dp_replicate": 4,
+                    "native_flags__batch_size": 2,
                 },
                 "guards.gpus",
             ),
@@ -485,18 +485,23 @@ class RecipeSelectionTests(unittest.TestCase):
             **kwargs,
         )
 
-    def copy_recipe(self, filename="training-30k.recipe.json", flags=None):
+    def copy_recipe(self, filename="training-45k.recipe.json", flags=None):
         preset = copy.deepcopy(self.preset)
-        preset["native_flags"].update({"steps": 30000, **(flags or {})})
+        preset["native_flags"].update({"steps": 45000, **(flags or {})})
         path = self.presets / filename
         path.write_text(json.dumps(preset))
         return path
 
-    def test_default_has_reference_settings_and_resolves_project_relative_path(self):
+    def test_gpu_profiles_keep_reference_settings_and_resolve_default_path(self):
         default = tl.load_preset()
         reference = tl.load_preset("reference-15k")
-        self.assertEqual(default["name"], "training")
-        self.assertEqual({**default, "name": reference["name"]}, reference)
+        for recipe, ranks, batch in ((default, 1, 8), (tl.load_preset("training-2gpu"), 2, 4)):
+            expected = copy.deepcopy(reference)
+            expected.update(name=recipe["name"], summary=recipe["summary"])
+            expected["native_flags"].update(
+                {"parallelism.dp_replicate": ranks, "batch_size": batch, "steps": 30000}
+            )
+            self.assertEqual(recipe, expected)
         self.assertEqual(
             tl.resolve_recipe("config/training/training.recipe.json"),
             tl.resolve_recipe(),
@@ -504,15 +509,26 @@ class RecipeSelectionTests(unittest.TestCase):
         spec = self.plan()
         self.assertEqual(Path(spec["preset_file"]), self.default)
         self.assertEqual(spec["preset"], "training")
-        self.assertEqual(spec["effective"]["stop_budget_steps"], 15000)
+        self.assertEqual(spec["effective"]["stop_budget_steps"], 30000)
+        self.assertEqual(spec["effective"]["world_size"], 1)
+        self.assertEqual(spec["effective"]["per_rank_batch"], 8)
+        with self.assertRaisesRegex(tl.TrainingConfigError, "requested ranks"):
+            self.plan(selection=TWO)
         self.assertFalse((self.root / tl.RUNS_SUBDIR).exists())
+        selected = self.plan(selection=GPU0)
+        run, _ = tl.write_run_record(selected)
+        record = json.loads((run / "run.json").read_text())
+        record["gpu_selection"] = TWO
+        (run / "run.json").write_text(json.dumps(record))
+        with self.assertRaisesRegex(tl.TrainingConfigError, "requested ranks"):
+            load_spec(run / "run.json", self.root, self.presets)
 
     def test_copied_recipe_keeps_internal_name_and_is_revalidated_by_worker(self):
         path = self.copy_recipe()
         self.assertEqual(tl.load_preset(path)["name"], "training")
-        spec = self.plan(path, selection=TWO)
-        self.assertEqual(spec["preset"], "training-30k")
-        self.assertEqual(spec["effective"]["stop_budget_steps"], 30000)
+        spec = self.plan(path, selection=GPU0)
+        self.assertEqual(spec["preset"], "training-45k")
+        self.assertEqual(spec["effective"]["stop_budget_steps"], 45000)
         run, _ = tl.write_run_record(spec)
         _, preset, _, argv = load_spec(run / "run.json", self.root, self.presets)
         self.assertEqual(preset["name"], "training")
@@ -561,9 +577,15 @@ class RecipeSelectionTests(unittest.TestCase):
 
     def test_cli_default_and_recipe_smoke_use_same_selector_and_idle_gpu_callback(self):
         path = self.copy_recipe()
-        for options, expected, steps in (
-            ([], self.default, 15000),
-            (["--recipe", str(path), "--smoke"], path, 4),
+        dual = self.copy_recipe(
+            "training-2gpu.recipe.json",
+            {"parallelism.dp_replicate": 2, "batch_size": 4, "steps": 30000},
+        )
+        for options, expected, steps, selection in (
+            ([], self.default, 30000, GPU0),
+            (["--recipe", str(path), "--smoke"], path, 4, GPU0),
+            (["--recipe", str(dual)], dual, 30000, TWO),
+            (["--recipe", str(dual), "--smoke"], dual, 4, TWO),
         ):
             original = tl.plan
             with (
@@ -578,7 +600,7 @@ class RecipeSelectionTests(unittest.TestCase):
                 patch.object(tl, "launch", return_value=0) as launch,
                 patch.object(tl, "query_gpus") as query,
             ):
-                query.return_value = tl.gpu_inventory("0, GPU-a, 15, 0\n", "")
+                query.return_value = tl.gpu_inventory("0, GPU-a, 15, 0\n1, GPU-b, 15, 0\n", "")
                 self.assertEqual(
                     tl.main(
                         [
@@ -594,9 +616,13 @@ class RecipeSelectionTests(unittest.TestCase):
                 spec = launch.call_args.args[0]
                 self.assertEqual(Path(spec["preset_file"]), expected)
                 self.assertEqual(spec["effective"]["stop_budget_steps"], steps)
-                self.assertEqual(spec["gpu_selection"], GPU0)
+                self.assertEqual(spec["gpu_selection"], selection)
+                self.assertEqual(spec["effective"]["global_batch"], 8)
                 if options:
-                    self.assertEqual(spec["_preset"]["native_flags"]["steps"], 30000)
+                    self.assertEqual(
+                        spec["_preset"]["native_flags"]["steps"],
+                        30000 if expected == dual else 45000,
+                    )
                     run, _ = tl.write_run_record(spec)
                     self.assertEqual(
                         load_spec(run / "run.json", self.root, self.presets)[3],
@@ -606,8 +632,8 @@ class RecipeSelectionTests(unittest.TestCase):
     def test_cli_check_defaults_and_selects_without_gpu_access(self):
         path = self.copy_recipe()
         for options, expected, steps in (
-            ([], self.default, 15000),
-            (["--recipe", str(path)], path, 30000),
+            ([], self.default, 30000),
+            (["--recipe", str(path)], path, 45000),
         ):
             original = tl.plan
             with (
@@ -640,6 +666,7 @@ class RecipeSelectionTests(unittest.TestCase):
                 self.assertEqual(Path(report["preset_file"]), expected)
                 self.assertEqual(report["effective"]["stop_budget_steps"], steps)
                 self.assertFalse(report["training_started"])
+                self.assertEqual(set(report["topology_candidates"]), {"1"})
 
     def test_cli_still_requires_both_dataset_arguments(self):
         for args in (
@@ -844,15 +871,19 @@ class SelectedPlanReplayTests(unittest.TestCase):
 class LaunchSeamTests(unittest.TestCase):
     GPUS = "0, GPU-a, 15, 0\n1, GPU-b, 15, 0\n2, GPU-c, 30000, 99\n"
 
-    def select(self, apps="", gpus=None):
+    def select(self, apps="", gpus=None, limit=None):
         return tl.select_idle_gpus(
-            tl.gpu_inventory(self.GPUS if gpus is None else gpus, apps), [0, 1]
+            tl.gpu_inventory(self.GPUS if gpus is None else gpus, apps), [0, 1], limit=limit
         )
 
     def test_idle_selection_prefers_both_and_falls_back_to_the_idle_one(self):
         self.assertEqual(self.select(), TWO)
         self.assertEqual(self.select("GPU-a, 4242\n"), GPU1)  # GPU0 busy -> GPU1 only
         self.assertEqual(self.select("GPU-b, 4242\n"), GPU0)  # GPU1 busy -> GPU0 only
+        self.assertEqual(self.select(limit=1), GPU0)
+        self.assertEqual(self.select("GPU-a, 4242\n", limit=1), GPU1)
+        self.assertEqual(self.select("GPU-b, 4242\n", limit=1), GPU0)
+        self.assertEqual(self.select(limit=2), TWO)
         with self.assertRaisesRegex(
             tl.TrainingConfigError, "no idle eligible GPU.*not waiting"
         ):
