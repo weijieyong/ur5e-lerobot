@@ -30,6 +30,7 @@ from scripts.train_lora import (
     load_preset,
     parse_argv,
     require,
+    resolve_recipe,
     sha256,
     write_json,
 )
@@ -51,15 +52,11 @@ def load_spec(run_json, root=ROOT, preset_dir=PRESET_DIR):
         "run identity mismatch",
     )
     preset = spec["preset_content"]
-    source_preset = Path(preset_dir) / (
-        "reference-15k.recipe.json"
-        if spec["preset"] == "reference-15k"
-        else f"{spec['preset']}.json"
-    )
+    source_preset = resolve_recipe(spec["preset_file"], preset_dir)
     require(
         sha256(source_preset) == spec["preset_sha256"]
         and bind_dataset(
-            load_preset(spec["preset"], preset_dir), **spec["dataset_inputs"]
+            load_preset(source_preset, preset_dir), **spec["dataset_inputs"]
         )
         == preset,
         "preset file changed since launch",

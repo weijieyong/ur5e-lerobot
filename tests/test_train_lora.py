@@ -21,7 +21,7 @@ from scripts.train_lora_entry import load_spec
 BASELINE = tl.bind_dataset(
     tl.load_preset("reference-15k"), "data/synthetic", "local/synthetic"
 )
-# Mathematical schedule variants, not additional supported recipes.
+# Mathematical schedule variants used by these tests.
 BASELINE["native_flags"]["steps"] = 50000
 LOWLR = copy.deepcopy(BASELINE)
 LOWLR["native_flags"].update(
@@ -186,14 +186,16 @@ class RecipeGuardTests(unittest.TestCase):
                 "relative_exclude_joints",
             ),
             (
-                {"native_flags__dataset_DOT_image_transforms_DOT_enable": True},
+                {"native_flags__dataset_DOT_image_transforms_DOT_enable": "true"},
                 "image_transforms",
             ),
-            ({"native_flags__max_eval_samples": 100}, "max_eval_samples"),
+            ({"native_flags__max_eval_samples": -1}, "max_eval_samples"),
+            ({"native_flags__max_eval_samples": True}, "max_eval_samples"),
+            ({"native_flags__max_eval_samples": 1.5}, "max_eval_samples"),
             ({"native_flags__batch_size": 2}, "batch topology"),
             (
                 {"native_flags__accelerator_DOT_gradient_accumulation_DOT_steps": 2},
-                "batch topology",
+                "accumulation",
             ),
             (
                 {
@@ -206,8 +208,9 @@ class RecipeGuardTests(unittest.TestCase):
             ({"native_flags__policy_DOT_optimizer_lr": 0.01}, "peak"),
             ({"native_flags__policy_DOT_scheduler_warmup_steps": 30000}, "warmup"),
             ({"native_flags__steps": 500}, "stop budget"),
-            ({"native_flags__eval_steps": 5000}, "eval_steps"),
-            ({"native_flags__steps": 15001}, "eval_steps"),
+            ({"native_flags__eval_steps": -1}, "eval_steps"),
+            ({"native_flags__save_freq": 0}, "save_freq"),
+            ({"native_flags__save_freq": True}, "save_freq"),
             ({"native_flags__output_dir": "/tmp/x"}, "output_dir"),
             (
                 {"native_flags__dataset_DOT_root": "/abs/elsewhere/dataset"},
@@ -236,8 +239,10 @@ class RecipeGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(tl.TrainingConfigError, "available"):
             tl.load_preset("lora-missing")
         with TemporaryDirectory() as tmp:
-            (Path(tmp) / "other.json").write_text(json.dumps(BASELINE))
-            with self.assertRaisesRegex(tl.TrainingConfigError, "schema/name"):
+            (Path(tmp) / "other.recipe.json").write_text(
+                json.dumps({**BASELINE, "schema": 2})
+            )
+            with self.assertRaisesRegex(tl.TrainingConfigError, "schema"):
                 tl.load_preset("other", tmp)
 
 
@@ -438,6 +443,214 @@ class CheckpointTests(unittest.TestCase):
             tl.expected_save_steps(15000, 2500), [2500, 5000, 7500, 10000, 12500, 15000]
         )
         self.assertEqual(tl.expected_save_steps(4, 2), [2, 4])
+
+    def test_noninterval_final_checkpoint_is_still_verified(self):
+        flags = {**LOWLR["native_flags"], "steps": 31000}
+        saves = tl.expected_save_steps(31000, 2500)
+        self.assertEqual(saves, [*range(2500, 30001, 2500), 31000])
+        with TemporaryDirectory() as tmp:
+            final = self.make_checkpoint(
+                Path(tmp) / "final", flags, saves[-1], tl.expected_lr(flags, saves[-1])
+            )
+            self.assertEqual(
+                tl.check_saved_checkpoint(final, 31000, flags)["step"], 31000
+            )
+            (final / "pretrained_model" / "adapter_model.safetensors").unlink()
+            with self.assertRaisesRegex(tl.TrainingConfigError, "adapter_model"):
+                tl.check_saved_checkpoint(final, 31000, flags)
+
+
+class RecipeSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "project"
+        self.presets = self.root / "config/training"
+        self.presets.mkdir(parents=True)
+        bound = tl.bind_dataset(tl.load_preset(), "data/synthetic", "local/synthetic")
+        self.preset = fake_assets(self.root, bound)
+        # Source recipes do not contain dataset inputs: the caller must supply both.
+        del self.preset["native_flags"]["dataset.root"]
+        del self.preset["native_flags"]["dataset.repo_id"]
+        self.default = self.presets / "training.recipe.json"
+        self.default.write_text(json.dumps(self.preset))
+
+    def plan(self, recipe=None, **kwargs):
+        return tl.plan(
+            recipe,
+            root=self.root,
+            preset_dir=self.presets,
+            dataset_root="data/synthetic",
+            repo_id="local/synthetic",
+            **kwargs,
+        )
+
+    def copy_recipe(self, filename="training-30k.recipe.json", flags=None):
+        preset = copy.deepcopy(self.preset)
+        preset["native_flags"].update({"steps": 30000, **(flags or {})})
+        path = self.presets / filename
+        path.write_text(json.dumps(preset))
+        return path
+
+    def test_default_has_reference_settings_and_resolves_project_relative_path(self):
+        default = tl.load_preset()
+        reference = tl.load_preset("reference-15k")
+        self.assertEqual(default["name"], "training")
+        self.assertEqual({**default, "name": reference["name"]}, reference)
+        self.assertEqual(
+            tl.resolve_recipe("config/training/training.recipe.json"),
+            tl.resolve_recipe(),
+        )
+        spec = self.plan()
+        self.assertEqual(Path(spec["preset_file"]), self.default)
+        self.assertEqual(spec["preset"], "training")
+        self.assertEqual(spec["effective"]["stop_budget_steps"], 15000)
+        self.assertFalse((self.root / tl.RUNS_SUBDIR).exists())
+
+    def test_copied_recipe_keeps_internal_name_and_is_revalidated_by_worker(self):
+        path = self.copy_recipe()
+        self.assertEqual(tl.load_preset(path)["name"], "training")
+        spec = self.plan(path, selection=TWO)
+        self.assertEqual(spec["preset"], "training-30k")
+        self.assertEqual(spec["effective"]["stop_budget_steps"], 30000)
+        run, _ = tl.write_run_record(spec)
+        _, preset, _, argv = load_spec(run / "run.json", self.root, self.presets)
+        self.assertEqual(preset["name"], "training")
+        self.assertEqual(argv, spec["native_argv"])
+        self.copy_recipe(flags={"steps": 31000})
+        with self.assertRaisesRegex(tl.TrainingConfigError, "preset file changed"):
+            load_spec(run / "run.json", self.root, self.presets)
+
+    def test_experiment_settings_reach_native_config_and_worker(self):
+        path = self.copy_recipe(
+            flags={
+                "steps": 31000,
+                "eval_steps": 1000,
+                "save_freq": 2500,
+                "max_eval_samples": 100,
+                "dataset.image_transforms.enable": True,
+            },
+        )
+        spec = self.plan(path, selection=GPU0)
+        effective = spec["effective"]
+        self.assertEqual(effective["stop_budget_steps"], 31000)
+        self.assertEqual(effective["eval_steps"], 1000)
+        self.assertEqual(effective["save_freq"], 2500)
+        self.assertEqual(effective["max_eval_samples"], 100)
+        self.assertIs(effective["image_augmentation"], True)
+        run, _ = tl.write_run_record(spec)
+        _, _, _, argv = load_spec(run / "run.json", self.root, self.presets)
+        self.assertEqual(argv, spec["native_argv"])
+
+    def test_recipe_paths_and_internal_names_cannot_escape_run_directory(self):
+        self.preset["name"] = "../../outside"
+        for filename, label in (
+            ("training-30k.recipe.json", "training-30k"),
+            ("..odd name_! .recipe.json", "odd-name"),
+            ("....recipe.json", "recipe"),
+        ):
+            with self.subTest(filename=filename):
+                path = self.copy_recipe(filename)
+                spec = self.plan(path)
+                run = Path(spec["run_dir"])
+                self.assertEqual(spec["preset"], label)
+                self.assertEqual(run.parent, self.root / tl.RUNS_SUBDIR)
+                self.assertTrue(run.name.startswith(f"{label}-"))
+        with self.assertRaisesRegex(tl.TrainingConfigError, "invalid run label"):
+            tl.planned_run_dir(self.root, "../outside")
+
+    def test_cli_default_and_recipe_smoke_use_same_selector_and_idle_gpu_callback(self):
+        path = self.copy_recipe()
+        for options, expected, steps in (
+            ([], self.default, 15000),
+            (["--recipe", str(path), "--smoke"], path, 4),
+        ):
+            original = tl.plan
+            with (
+                self.subTest(options=options),
+                patch.object(
+                    tl,
+                    "plan",
+                    side_effect=lambda recipe, **kwargs: original(
+                        recipe, root=self.root, preset_dir=self.presets, **kwargs
+                    ),
+                ),
+                patch.object(tl, "launch", return_value=0) as launch,
+                patch.object(tl, "query_gpus") as query,
+            ):
+                query.return_value = tl.gpu_inventory("0, GPU-a, 15, 0\n", "")
+                self.assertEqual(
+                    tl.main(
+                        [
+                            "--dataset-root",
+                            "data/synthetic",
+                            "--repo-id",
+                            "local/synthetic",
+                            *options,
+                        ]
+                    ),
+                    0,
+                )
+                spec = launch.call_args.args[0]
+                self.assertEqual(Path(spec["preset_file"]), expected)
+                self.assertEqual(spec["effective"]["stop_budget_steps"], steps)
+                self.assertEqual(spec["gpu_selection"], GPU0)
+                if options:
+                    self.assertEqual(spec["_preset"]["native_flags"]["steps"], 30000)
+                    run, _ = tl.write_run_record(spec)
+                    self.assertEqual(
+                        load_spec(run / "run.json", self.root, self.presets)[3],
+                        spec["native_argv"],
+                    )
+
+    def test_cli_check_defaults_and_selects_without_gpu_access(self):
+        path = self.copy_recipe()
+        for options, expected, steps in (
+            ([], self.default, 15000),
+            (["--recipe", str(path)], path, 30000),
+        ):
+            original = tl.plan
+            with (
+                self.subTest(options=options),
+                patch.object(
+                    tl,
+                    "plan",
+                    side_effect=lambda recipe, **kwargs: original(
+                        recipe, root=self.root, preset_dir=self.presets, **kwargs
+                    ),
+                ),
+                patch.object(tl, "query_gpus", side_effect=AssertionError("GPU query")),
+                patch.dict("os.environ"),
+                contextlib.redirect_stdout(io.StringIO()) as stdout,
+            ):
+                self.assertEqual(
+                    tl.main(
+                        [
+                            "--dataset-root",
+                            "data/synthetic",
+                            "--repo-id",
+                            "local/synthetic",
+                            "--dry-run",
+                            *options,
+                        ]
+                    ),
+                    0,
+                )
+                report = json.loads(stdout.getvalue())
+                self.assertEqual(Path(report["preset_file"]), expected)
+                self.assertEqual(report["effective"]["stop_budget_steps"], steps)
+                self.assertFalse(report["training_started"])
+
+    def test_cli_still_requires_both_dataset_arguments(self):
+        for args in (
+            [],
+            ["--dataset-root", "data/synthetic"],
+            ["--repo-id", "local/synthetic"],
+        ):
+            with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    tl.main(args)
+                self.assertEqual(error.exception.code, 2)
 
 
 class TopologyTests(unittest.TestCase):

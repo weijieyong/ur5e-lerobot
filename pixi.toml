@@ -68,12 +68,12 @@ cmd = 'lerobot-dataset-viz --repo-id "$ROLLOUT_DATASET_REPO_ID" --root "$HF_LERO
 [tasks.train]
 description = "Fresh LoRA training with automatic train-only stats (uses idle eligible GPUs; no robot)"
 args = [{ arg = "dataset_root" }, { arg = "repo_id" }, { arg = "mode", default = "" }]
-cmd = "python -m scripts.train_lora reference-15k --dataset-root {{ dataset_root }} --repo-id {{ repo_id }} {{ mode }}"
+cmd = "python -m scripts.train_lora --dataset-root {{ dataset_root }} --repo-id {{ repo_id }} {{ mode }}"
 
 [tasks.train-check]
 description = "CPU native config/base metadata check; stats fit when training starts (no model load or hardware)"
 args = [{ arg = "dataset_root" }, { arg = "repo_id" }]
-cmd = "python -m scripts.train_lora reference-15k --dataset-root {{ dataset_root }} --repo-id {{ repo_id }} --dry-run"
+cmd = "python -m scripts.train_lora --dataset-root {{ dataset_root }} --repo-id {{ repo_id }} --dry-run"
 
 [tasks.rollout]
 description = "Supervised RTC policy rollout; moves robot (READY: n/Right starts, optional t edits; h homes; Right saves; Left discards; Esc exits; no live viewer unless --display_data=true)"

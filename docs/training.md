@@ -45,7 +45,7 @@ pixi run hf download google/paligemma-3b-pt-224 --cache-dir ./hf/hub \
 > Set `HF_HUB_OFFLINE=1` again afterwards. Training and rollout load only local files
 > either way, so forgetting only affects LeRobot commands you run by hand.
 
-The revision is the snapshot `config/training/reference-15k.recipe.json` expects;
+The revision is the snapshot `config/training/training.recipe.json` expects;
 `pixi run train-check` confirms the base snapshot is in place.
 
 ## Filter saved episodes
@@ -87,11 +87,38 @@ pixi run train data/local/new-recording-filtered local/new-recording-filtered
 Equivalent offline config check:
 
 ```sh
-python -m scripts.train_lora reference-15k --dataset-root data/local/new-recording-filtered --repo-id local/new-recording-filtered --dry-run
+pixi run python -m scripts.train_lora --dataset-root data/local/new-recording-filtered --repo-id local/new-recording-filtered --dry-run
 ```
 
-Dataset root is project-relative. Both dataset inputs are explicit; the one
-`config/training/reference-15k.recipe.json` owns training settings.
+Dataset root is project-relative. Both dataset inputs are required. Training and
+`train-check` default to `config/training/training.recipe.json`. It starts with the
+same settings as the unchanged `reference-15k.recipe.json` reference.
+
+For an experiment, copy the default recipe and edit its `native_flags`, for example
+set `steps` to 30000. The filename selects the recipe; its internal `name` can stay
+`training`. Use Pixi's `--` separator to forward recipe options:
+
+```sh
+cp config/training/training.recipe.json config/training/training-30k.recipe.json
+# Edit native_flags.steps in the copy before checking or training.
+pixi run train-check data/local/new-recording-filtered local/new-recording-filtered -- --recipe config/training/training-30k.recipe.json
+pixi run train data/local/new-recording-filtered local/new-recording-filtered -- --recipe config/training/training-30k.recipe.json --smoke
+pixi run train data/local/new-recording-filtered local/new-recording-filtered -- --recipe config/training/training-30k.recipe.json
+```
+
+Direct module invocation accepts the same `--recipe` option, without the Pixi
+separator. Recipe paths are project-relative or absolute. Run-directory labels
+come from the selected filename, not its internal `name`. The legacy positional
+`reference-15k` module argument still selects the reference recipe.
+
+Evaluation (`eval_steps`) and saving (`save_freq`) can use separate intervals.
+Set `eval_steps=0` to disable development evaluation; the held-out split is still
+reserved. `max_eval_samples=0` evaluates the full development split; a positive
+value caps it.
+Set `dataset.image_transforms.enable=true` to enable native image augmentation.
+The stop budget need not be a multiple of `save_freq`; the final checkpoint is
+still required and verified. `--smoke` overrides the budget and eval/save intervals
+for its four-update mechanics check, not a learning result.
 
 The supported route is local, single-task, fresh-base training: no streaming or
 resume. Native splitting holds out the last ceil(episodes × 0.2) episodes **per task**,
