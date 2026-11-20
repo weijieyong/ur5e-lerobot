@@ -37,7 +37,7 @@ driver supporting CUDA 12.9.
 
 | | Recommended | Notes |
 | --- | --- | --- |
-| GPU | Minimum 1× RTX 6000 Ada (48 GB); tested on 2× | The reference recipe trains batch 4 per GPU on two GPUs, or batch 8 on one. Run `pixi run train-check` before a long run. |
+| GPU | Minimum 1× RTX 6000 Ada (48 GB); tested on 2× | Default: one idle GPU, batch 8, 30000 updates. An optional two-GPU recipe uses batch 4 per GPU. See the training guide for `train-check`. |
 | Disk | 100 GB+ free | Base model, datasets and checkpoints. |
 
 > [!IMPORTANT]

@@ -1,8 +1,8 @@
 """Fresh-base pi0.5 LoRA training with automatic train-only normalization fitting.
 
-python -m scripts.train_lora reference-15k --dataset-root data/local/pick --repo-id local/pick --dry-run
+python -m scripts.train_lora --dataset-root data/local/pick --repo-id local/pick --dry-run
 
-The fixed recipe owns training settings; dataset inputs are explicit. Finalized raw
+The selected recipe owns training settings; dataset inputs are explicit. Finalized raw
 recordings stay unchanged. Each run starts fresh; no resume or Hub transfer.
 Actual idle GPU topology is resolved at launch with global batch preserved.
 """
@@ -38,13 +38,12 @@ REQUIRED_FLAGS = {
     "parallelism.dp_shard": 1,
     "accelerator.mixed_precision": "bf16",
     "dataset.streaming": False,
-    "dataset.image_transforms.enable": False,
     "resume": False,
     "save_checkpoint": True,
     "save_checkpoint_to_hub": False,
     "trackio.enable": False,
     "env_eval_freq": 0,
-    "max_eval_samples": 0,
+    "accelerator.gradient_accumulation.steps": 1,
 }
 SCHEDULE_FLAGS = (
     "policy.optimizer_lr",
@@ -105,22 +104,37 @@ def write_json(path, value, mode="w"):
 # ---------------------------------------------------------------- preset -> argv
 
 
-def load_preset(name, preset_dir=PRESET_DIR):
+def resolve_recipe(recipe=None, preset_dir=PRESET_DIR):
+    """Resolve the default, a legacy preset name, or a project-relative/absolute recipe file."""
+    selector = "training" if recipe is None else str(recipe)
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]*", selector):
+        path = Path(preset_dir) / f"{selector}.recipe.json"
+    else:
+        require(
+            selector.endswith(".recipe.json"), f"invalid preset or recipe {selector!r}"
+        )
+        path = Path(selector)
+        if not path.is_absolute():
+            path = ROOT / path
+    available = sorted(p.name for p in Path(preset_dir).glob("*.recipe.json"))
     require(
-        re.fullmatch(r"[a-z0-9][a-z0-9-]*", name or "") is not None,
-        f"invalid preset name {name!r}",
+        path.is_file(), f"unknown preset/recipe {selector!r}; available: {available}"
     )
-    path = Path(preset_dir) / (
-        "reference-15k.recipe.json" if name == "reference-15k" else f"{name}.json"
-    )
-    available = sorted(
-        p.stem for p in Path(preset_dir).glob("*.json") if "." not in p.stem
-    )
-    require(path.is_file(), f"unknown preset {name!r}; available: {available}")
+    return path.resolve()
+
+
+def recipe_label(path):
+    """Use only the filename, never recipe metadata or directories, in generated output paths."""
+    name = Path(path).name.removesuffix(".json").removesuffix(".recipe")
+    return re.sub(r"[^a-zA-Z0-9-]+", "-", name).strip("-")[:80] or "recipe"
+
+
+def load_preset(recipe=None, preset_dir=PRESET_DIR):
+    path = resolve_recipe(recipe, preset_dir)
     preset = json.loads(path.read_text())
     require(
-        preset.get("schema") == 1 and preset.get("name") == name,
-        f"{path}: schema/name mismatch",
+        preset.get("schema") == 1,
+        f"{path}: schema mismatch",
     )
     check_recipe(preset)
     return preset
@@ -151,6 +165,7 @@ def check_recipe(preset):
         "seed",
         "save_freq",
         "eval_steps",
+        "max_eval_samples",
         "log_freq",
         "num_workers",
         "peft.r",
@@ -186,10 +201,10 @@ def check_recipe(preset):
         0 < warmup < decay, "warmup must be positive and shorter than the decay horizon"
     )
     require(warmup < steps, "stop budget must extend past warmup")
-    save, evaluate = flags["save_freq"], flags["eval_steps"]
+    require(flags["save_freq"] > 0, "save_freq must be positive")
     require(
-        save > 0 and evaluate == save and steps % save == 0,
-        "eval_steps must equal save_freq and divide the stop budget (full dev eval at every save)",
+        type(flags.get("dataset.image_transforms.enable")) is bool,
+        "dataset.image_transforms.enable must be a boolean",
     )
     require(
         flags["peft.r"] > 0
@@ -218,10 +233,10 @@ def check_recipe(preset):
     gpus = guards.get("gpus")
     require(
         isinstance(gpus, list)
-        and len(gpus) == world
-        and len(set(gpus)) == world
+        and len(gpus) >= world
+        and len(set(gpus)) == len(gpus)
         and all(type(g) is int and g >= 0 for g in gpus),
-        "guards.gpus must list one GPU per rank",
+        "guards.gpus must list distinct eligible GPUs for the requested ranks",
     )
     split = flags.get("dataset.eval_split")
     require(
@@ -272,8 +287,9 @@ def resolve_topology(preset, gpu_count):
         flags["accelerator.gradient_accumulation.steps"],
     )
     require(
-        type(gpu_count) is int and 1 <= gpu_count <= len(guards["gpus"]),
-        f"{gpu_count} GPUs is outside the preset's eligible GPUs {guards['gpus']}",
+        type(gpu_count) is int
+        and 1 <= gpu_count <= min(len(guards["gpus"]), flags["parallelism.dp_replicate"]),
+        f"{gpu_count} GPUs exceeds the recipe's requested ranks or eligible GPUs",
     )
     require(accum == 1, "topology derivation requires gradient accumulation 1")
     require(
@@ -349,6 +365,10 @@ def parse_argv(argv):
 
 
 def planned_run_dir(root, name, smoke=False, now=None):
+    require(
+        re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9-]*", name or "") is not None,
+        f"invalid run label {name!r}",
+    )
     now = now or dt.datetime.now(dt.timezone.utc)
     stamp = now.strftime("%Y%m%dT%H%M%S.%fZ")
     run = Path(root) / RUNS_SUBDIR / f"{name}-{stamp}{'-smoke' if smoke else ''}"
@@ -438,7 +458,7 @@ def check_assets(preset, root, hash_base=False):
     )
     require(
         type(info.get("fps")) in (int, float) and info["fps"] == 15,
-        "reference-15k requires a 15 Hz dataset; inspect meta/info.json fps",
+        "training requires a 15 Hz dataset; inspect meta/info.json fps",
     )
     base = Path(root) / flags["policy.pretrained_path"]
     weights = base / "model.safetensors"
@@ -628,7 +648,7 @@ def effective_settings(cfg, flags):
         "output_dir": flags["output_dir"],
         "policy_push_to_hub": False,
         "save_checkpoint_to_hub": False,
-        "image_augmentation": False,
+        "image_augmentation": flags["dataset.image_transforms.enable"],
     }
     for key, value in expected.items():
         require(
@@ -677,8 +697,8 @@ def is_idle(gpu):
     return not gpu["pids"] and gpu["memory_mib"] < 512 and gpu["util_pct"] == 0
 
 
-def select_idle_gpus(inventory, eligible):
-    """All idle GPUs among the preset's eligible indices that exist; refuse if none."""
+def select_idle_gpus(inventory, eligible, limit=None):
+    """Select up to limit idle eligible GPUs in index order; refuse if none."""
     present = [g for g in sorted(eligible) if g in inventory]
     require(present, f"none of the eligible GPUs {sorted(eligible)} is present")
     idle = [
@@ -695,7 +715,7 @@ def select_idle_gpus(inventory, eligible):
         )
         + " (not starting, not waiting)",
     )
-    return idle
+    return idle[:limit]
 
 
 def check_idle_gpus(inventory, selection):
@@ -781,7 +801,7 @@ def bind_dataset(preset, dataset_root=None, repo_id=None):
 
 
 def plan(
-    name,
+    name=None,
     root=ROOT,
     preset_dir=PRESET_DIR,
     smoke=False,
@@ -797,15 +817,14 @@ def plan(
     selection: launch-time idle GPUs ([{index, uuid}]); select(preset) returns one after the
     preset is loaded. None for both is the nominal preset topology (dry-run display only).
     """
-    preset = bind_dataset(load_preset(name, preset_dir), dataset_root, repo_id)
-    source_preset = Path(preset_dir) / (
-        "reference-15k.recipe.json" if name == "reference-15k" else f"{name}.json"
-    )
+    source_preset = resolve_recipe(name, preset_dir)
+    preset = bind_dataset(load_preset(source_preset, preset_dir), dataset_root, repo_id)
     if select is not None:
         selection = select(preset)
     if selection is not None:
         check_selection(preset, selection)
-    run = planned_run_dir(root, name, smoke, now)
+    label = recipe_label(source_preset)
+    run = planned_run_dir(root, label, smoke, now)
     argv = build_native_argv(
         preset,
         root,
@@ -835,7 +854,7 @@ def plan(
             f"schedule mismatch at step {step}",
         )
     return {
-        "preset": name,
+        "preset": label,
         "preset_file": str(source_preset),
         "preset_sha256": sha256(source_preset),
         "root": str(root),
@@ -994,7 +1013,13 @@ def main(argv=None):
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
     )
-    parser.add_argument("preset", help="reference-15k")
+    parser.add_argument(
+        "preset", nargs="?", help="legacy preset name, e.g. reference-15k"
+    )
+    parser.add_argument(
+        "--recipe",
+        help="recipe JSON path (default: config/training/training.recipe.json)",
+    )
     parser.add_argument(
         "--dataset-root",
         required=True,
@@ -1015,18 +1040,19 @@ def main(argv=None):
         help="4-update GPU mechanics gate with eval/save at 2 and 4",
     )
     args = parser.parse_args(argv)
+    if args.preset is not None and args.recipe is not None:
+        parser.error("choose either a legacy preset name or --recipe, not both")
+    recipe = args.recipe if args.recipe is not None else args.preset
     try:
         if args.dry_run:
             os.environ["CUDA_VISIBLE_DEVICES"] = ""
             os.environ.update(HUB_OFFLINE)
         if args.dry_run:
-            spec = plan(
-                args.preset, dataset_root=args.dataset_root, repo_id=args.repo_id
-            )
+            spec = plan(recipe, dataset_root=args.dataset_root, repo_id=args.repo_id)
             preset = spec["_preset"]
             spec["topology_candidates"] = {}
             for count in range(
-                1, len(preset["guards"]["gpus"]) + 1
+                1, preset["native_flags"]["parallelism.dp_replicate"] + 1
             ):  # each launch-resolvable plan, on CPU
                 try:
                     argv = build_native_argv(
@@ -1042,12 +1068,14 @@ def main(argv=None):
                     spec["topology_candidates"][str(count)] = f"unsupported: {exc}"
         else:  # select idle eligible GPUs before building the effective native plan
             spec = plan(
-                args.preset,
+                recipe,
                 smoke=args.smoke,
                 dataset_root=args.dataset_root,
                 repo_id=args.repo_id,
                 select=lambda preset: select_idle_gpus(
-                    query_gpus(), preset["guards"]["gpus"]
+                    query_gpus(),
+                    preset["guards"]["gpus"],
+                    limit=preset["native_flags"]["parallelism.dp_replicate"],
                 ),
             )
     except TrainingConfigError as exc:

@@ -45,7 +45,7 @@ pixi run hf download google/paligemma-3b-pt-224 --cache-dir ./hf/hub \
 > Set `HF_HUB_OFFLINE=1` again afterwards. Training and rollout load only local files
 > either way, so forgetting only affects LeRobot commands you run by hand.
 
-The revision is the snapshot `config/training/reference-15k.recipe.json` expects;
+The revision is the snapshot `config/training/training.recipe.json` expects;
 `pixi run train-check` confirms the base snapshot is in place.
 
 ## Filter saved episodes
@@ -87,11 +87,44 @@ pixi run train data/local/new-recording-filtered local/new-recording-filtered
 Equivalent offline config check:
 
 ```sh
-python -m scripts.train_lora reference-15k --dataset-root data/local/new-recording-filtered --repo-id local/new-recording-filtered --dry-run
+pixi run python -m scripts.train_lora --dataset-root data/local/new-recording-filtered --repo-id local/new-recording-filtered --dry-run
 ```
 
-Dataset root is project-relative. Both dataset inputs are explicit; the one
-`config/training/reference-15k.recipe.json` owns training settings.
+Dataset root is project-relative. Both dataset inputs are required. Training and
+`train-check` default to `config/training/training.recipe.json`.
+
+For an experiment, copy the default recipe and edit its `native_flags`, for example
+set `steps` to 45000. The filename selects the recipe; its internal `name` can stay
+`training`. Use Pixi's `--` separator to forward recipe options:
+
+```sh
+cp config/training/training.recipe.json config/training/training-45k.recipe.json
+# Edit native_flags.steps in the copy before checking or training.
+pixi run train-check data/local/new-recording-filtered local/new-recording-filtered -- --recipe config/training/training-45k.recipe.json
+pixi run train data/local/new-recording-filtered local/new-recording-filtered -- --recipe config/training/training-45k.recipe.json --smoke
+pixi run train data/local/new-recording-filtered local/new-recording-filtered -- --recipe config/training/training-45k.recipe.json
+```
+
+The default uses one idle GPU for 30000 updates, with batch 8. To request two GPUs
+for the same budget, select the supplied recipe:
+
+```sh
+pixi run train data/local/new-recording-filtered local/new-recording-filtered -- --recipe config/training/training-2gpu.recipe.json
+```
+
+Direct module invocation accepts the same `--recipe` option, without the Pixi
+separator. Recipe paths are project-relative or absolute. Run-directory labels
+come from the selected filename, not its internal `name`. The legacy positional
+`reference-15k` module argument still selects the reference recipe.
+
+Evaluation (`eval_steps`) and saving (`save_freq`) can use separate intervals.
+Set `eval_steps=0` to disable development evaluation; the held-out split is still
+reserved. `max_eval_samples=0` evaluates the full development split; a positive
+value caps it.
+Set `dataset.image_transforms.enable=true` to enable native image augmentation.
+The stop budget need not be a multiple of `save_freq`; the final checkpoint is
+still required and verified. `--smoke` overrides the budget and eval/save intervals
+for its four-update mechanics check, not a learning result.
 
 The supported route is local, single-task, fresh-base training: no streaming or
 resume. Native splitting holds out the last ceil(episodes × 0.2) episodes **per task**,
@@ -118,27 +151,29 @@ it is never a required input or proof. Keep finalized dataset files unchanged
 throughout a run. `train-check` checks assets/native CPU configuration, not fitted
 statistics or a model load; fitting occurs when training starts.
 
-Reference settings:
+Default settings:
 
 - Base revision: `22c30e5b34f9e7ab738b1b34fc2fc5ecfe2d28f0`.
 - Learning rate: peak 1e-4, floor 1e-5, warmup 1000 steps, decay horizon 30000 steps.
-- Stop: 15000 steps.
+- Stop: 30000 steps.
 - Batch: global batch 8, gradient accumulation 1.
 - Adapter: expert-side LoRA with rank 32 and alpha 64. The VLM is frozen.
 - Precision and data: BF16, no augmentation, seed 1000.
 - Full development evaluation and save every 2500 steps.
 
-This is a reference schedule through 15k steps. It is not a bit-identical replay and
-does not guarantee results on new data.
+The original `reference-15k.recipe.json` remains available as a 15000-step reference.
+Neither recipe guarantees results on new data.
 
-The recipe allows physical GPU indices 0 and 1. At launch the trainer queries
-`nvidia-smi`, keeps the allowed GPUs that exist and are idle, and revalidates their
-UUIDs before it starts. Two idle GPUs train with batch 4 per GPU. One idle GPU trains
-with batch 8, so the global batch stays 8 and the schedule does not change. A one-GPU
-host works if that GPU has index 0 or 1 and enough memory (the README lists a 48 GB
-minimum). If no allowed GPU is idle, the trainer refuses to start. It does not wait and
-does not touch other jobs. Version, source, base hash, strict loading, optimizer, LoRA
-tensor, schedule and save guards stay in force.
+Both recipes allow physical GPU indices 0 and 1. `guards.gpus` lists eligible cards;
+`parallelism.dp_replicate` caps how many to use. The default selects one idle card,
+preferring GPU 0 and falling back to GPU 1. The two-GPU recipe selects both when
+idle, with batch 4 per GPU; if only one is idle, it uses batch 8 on that card. The
+global batch stays 8 in either case.
+
+The trainer queries `nvidia-smi` and revalidates selected UUIDs before starting.
+If no eligible GPU is idle, it refuses to start. It does not wait or touch other
+jobs. Version, source, base hash, strict loading, optimizer, LoRA tensor, schedule
+and save guards stay in force.
 Run the operator-authorized GPU smoke/save and strict reload checks before a long
 run. Every run has a new `outputs/training-runs/` directory.
 
