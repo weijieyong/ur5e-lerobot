@@ -141,14 +141,7 @@ def main():
     if not math.isfinite(margin) or margin < 0:
         raise ValueError("UR5E_WORKSPACE_MARGIN_M must be finite and nonnegative")
     # Teaching can replace an old box. Only position bounds are disabled, not tilt/joint guards.
-    teaching = SpaceMouseConfig(
-        x_min_m=None,
-        x_max_m=None,
-        y_min_m=None,
-        y_max_m=None,
-        z_min_m=None,
-        stop_on_escape=True,
-    )
+    teaching = SpaceMouseConfig(stop_on_escape=True)
     teaching.max_linear_speed_m_s = min(teaching.max_linear_speed_m_s, linear)
     teaching.max_angular_speed_rad_s = min(teaching.max_angular_speed_rad_s, angular)
     print(
@@ -161,7 +154,17 @@ def main():
     try:
         if input("Enter to enable SpaceMouse teaching; Ctrl+C to cancel: ").strip():
             return
-        robot = UR5e(UR5eConfig(cameras={}, timing_log_dir=""))
+        robot = UR5e(
+            UR5eConfig(
+                cameras={},
+                timing_log_dir="",
+                x_min_m=None,
+                x_max_m=None,
+                y_min_m=None,
+                y_max_m=None,
+                z_min_m=None,
+            )
+        )
         mouse = SpaceMouse(teaching)
         try:
             robot.connect()
@@ -181,7 +184,7 @@ def main():
             return
         backup = save_bounds(config, original, bounds)
         print(
-            f"Saved {config}; backup: {backup}. Restart teleop/record to load the bounds."
+            f"Saved {config}; backup: {backup}. Restart teleop/record/rollout to load the bounds."
         )
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled; config not saved.")

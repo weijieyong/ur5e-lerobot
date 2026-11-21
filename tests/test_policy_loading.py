@@ -191,7 +191,7 @@ class PolicyLoadingTests(unittest.TestCase):
         from scripts import rollout
 
         self.config.robot = SimpleNamespace(
-            max_joint_step_rad=0.05, home_joints_deg=[0.0] * 6
+            max_joint_step_rad=0.05, home_joints_deg=[0.0] * 6, z_min_m=0.1
         )
         self.config.teleop = None
         self.config.interactive = False
@@ -222,7 +222,7 @@ class PolicyLoadingTests(unittest.TestCase):
         from scripts import rollout
 
         self.config.robot = SimpleNamespace(
-            max_joint_step_rad=0.05, home_joints_deg=[0.0] * 6
+            max_joint_step_rad=0.05, home_joints_deg=[0.0] * 6, z_min_m=0.1
         )
         self.config.teleop = None
         self.config.interactive = False

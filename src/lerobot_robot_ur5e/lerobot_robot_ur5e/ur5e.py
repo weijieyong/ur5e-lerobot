@@ -28,6 +28,27 @@ GRIPPER = "gripper.pos"
 # Before homing: wait for gripper position (0 open .. 1 closed) to reach this, or give up without moving.
 HOME_OPEN_POSITION = 0.05
 HOME_OPEN_TIMEOUT_S = 3.0
+WORKSPACE_TOL_M = 1e-5
+WORKSPACE_WARN_INTERVAL_S = 2.0
+
+
+def _pose_vector(pose, source: str) -> np.ndarray:
+    arr = np.asarray(pose, dtype=float)
+    if arr.shape != (6,) or not np.isfinite(arr).all():
+        raise RuntimeError(f"UR5e returned invalid {source}")
+    return arr
+
+
+def _violated_faces(
+    pos: np.ndarray, lower: np.ndarray, upper: np.ndarray
+) -> list[str]:
+    faces = []
+    for axis, name in enumerate(("x", "y", "z")):
+        if pos[axis] < lower[axis] - WORKSPACE_TOL_M:
+            faces.append(f"{name}_min")
+        if pos[axis] > upper[axis] + WORKSPACE_TOL_M:
+            faces.append(f"{name}_max")
+    return faces
 
 # Connected robots by IP, so the SpaceMouse teleoperator in the same process can use the
 # robot's UR connection for IK and homing (only one control connection to the UR is possible).
@@ -205,6 +226,7 @@ class UR5e(Robot):
         self.rtde_r = None
         self.gripper: RobotiqSocket | OnRobotRG2 | None = None
         self._gripper_closed: bool | None = None
+        self._last_workspace_warn_s: float = -math.inf
         self._observation_timing = {}
         self._timing_file = None
 
@@ -337,6 +359,86 @@ class UR5e(Robot):
             log.info("Robot timing log: %s", path)
         self._timing_file.write(json.dumps(event) + "\n")
 
+    def workspace_bounds(self) -> tuple[np.ndarray, np.ndarray] | None:
+        c = self.config
+        if all(
+            v is None for v in (c.x_min_m, c.x_max_m, c.y_min_m, c.y_max_m, c.z_min_m)
+        ):
+            return None
+        lower = np.array(
+            [
+                v if v is not None else -np.inf
+                for v in (c.x_min_m, c.y_min_m, c.z_min_m)
+            ],
+            dtype=float,
+        )
+        upper = np.array(
+            [v if v is not None else np.inf for v in (c.x_max_m, c.y_max_m, None)],
+            dtype=float,
+        )
+        return lower, upper
+
+    def workspace_violations(self, pos: np.ndarray) -> list[str]:
+        bounds = self.workspace_bounds()
+        if bounds is None:
+            return []
+        return _violated_faces(pos, *bounds)
+
+    def _warn_workspace(self, faces: list[str], held: bool) -> None:
+        now = time.monotonic()
+        if now - self._last_workspace_warn_s < WORKSPACE_WARN_INTERVAL_S:
+            return
+        self._last_workspace_warn_s = now
+        detail = (
+            "IK fallback holding current joints"
+            if held
+            else "clamping TCP to boundary"
+        )
+        log.warning("Workspace bound hit (%s); %s", ", ".join(faces), detail)
+
+    def _clamp_workspace(
+        self, q_step: np.ndarray, q_meas: np.ndarray
+    ) -> tuple[np.ndarray, list[str], bool]:
+        bounds = self.workspace_bounds()
+        if bounds is None:
+            return q_step, [], False
+        lower, upper = bounds
+        fk_pose = _pose_vector(
+            self.rtde_c.getForwardKinematics(q_step.tolist()), "forward kinematics"
+        )
+        if not _violated_faces(fk_pose[:3], lower, upper):
+            return q_step, [], False
+
+        tcp_meas = _pose_vector(self.rtde_r.getActualTCPPose(), "TCP pose")
+        allowed_low = np.minimum(lower, tcp_meas[:3])
+        allowed_high = np.maximum(upper, tcp_meas[:3])
+        faces = _violated_faces(fk_pose[:3], allowed_low, allowed_high)
+        if not faces:
+            return q_step, [], False
+
+        clamped_pose = fk_pose.copy()
+        clamped_pose[:3] = np.clip(fk_pose[:3], allowed_low, allowed_high)
+        q_ik = np.asarray(
+            self.rtde_c.getInverseKinematics(clamped_pose.tolist(), q_meas.tolist()),
+            dtype=float,
+        )
+        if (
+            q_ik.shape == (6,)
+            and np.isfinite(q_ik).all()
+            and np.max(np.abs(q_ik - q_meas)) <= self.config.max_ik_jump_rad
+        ):
+            step = self.config.max_joint_step_rad
+            q_cand = q_meas + np.clip(q_ik - q_meas, -step, step)
+            cand_pose = _pose_vector(
+                self.rtde_c.getForwardKinematics(q_cand.tolist()), "forward kinematics"
+            )
+            if not _violated_faces(cand_pose[:3], allowed_low, allowed_high):
+                self._warn_workspace(faces, held=False)
+                return q_cand, faces, False
+
+        self._warn_workspace(faces, held=True)
+        return q_meas.copy(), faces, True
+
     def send_action(self, action: dict) -> dict:
         start = time.perf_counter()
         q_req = np.array([action[j] for j in JOINTS], dtype=float)
@@ -347,7 +449,8 @@ class UR5e(Robot):
         if q_meas.shape != (6,) or not np.isfinite(q_meas).all():
             raise ValueError("UR5e returned invalid measured joint angles")
         step = self.config.max_joint_step_rad
-        q_cmd = q_meas + np.clip(q_req - q_meas, -step, step)
+        q_step = q_meas + np.clip(q_req - q_meas, -step, step)
+        q_cmd, clamped_faces, workspace_held = self._clamp_workspace(q_step, q_meas)
         accepted = self.rtde_c.servoJ(
             q_cmd.tolist(), 0.0, 0.0, self.config.control_period_s,
             self.config.servo_lookahead_s, self.config.servo_gain,
@@ -376,6 +479,9 @@ class UR5e(Robot):
                 "send_end_s": time.perf_counter(),
                 "control_period_s": self.config.control_period_s,
                 "clipped": bool(np.any(q_req != q_cmd)),
+                "workspace_clamped": bool(clamped_faces),
+                "workspace_held": workspace_held,
+                "workspace_faces": clamped_faces,
                 "requested_joints": q_req.tolist(),
                 "sent_joints": q_cmd.tolist(),
             }

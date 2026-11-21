@@ -42,6 +42,11 @@ class RecordingTests(unittest.TestCase):
                     cameras={},
                     calibration_dir=Path(directory) / "robot",
                     timing_log_dir=str(Path(directory) / "timing"),
+                    x_min_m=None,
+                    x_max_m=None,
+                    y_min_m=None,
+                    y_max_m=None,
+                    z_min_m=None,
                 )
             )
             sent = []

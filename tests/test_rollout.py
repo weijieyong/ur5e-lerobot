@@ -346,7 +346,7 @@ class RolloutTests(unittest.TestCase):
             teleop=None,
             interactive=False,
             strategy=EpisodicStrategyConfig(),
-            robot=SimpleNamespace(home_joints_deg=[0.0] * 6),
+            robot=SimpleNamespace(home_joints_deg=[0.0] * 6, z_min_m=0.1),
             inference=SimpleNamespace(type="rtc"),
             fps=15,
         )
@@ -367,10 +367,33 @@ class RolloutTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "six finite"):
                 run_rollout(cfg)
             cfg.robot.home_joints_deg = [0.0] * 6
+            cfg.robot.z_min_m = None
+            with self.assertRaisesRegex(ValueError, "UR5E_Z_MIN_M"):
+                run_rollout(cfg)
+            cfg.robot.z_min_m = 0.1
             with self.assertRaisesRegex(RuntimeError, "no terminal"):
                 run_rollout(cfg)
             native.assert_not_called()
             tty.assert_called_once()
+
+    def test_setup_warns_without_blocking_when_home_fk_lies_outside_workspace(self):
+        strategy = ManualEpisodicStrategy(EpisodicStrategyConfig(), None)
+        robot = SimpleNamespace(
+            rtde_c=SimpleNamespace(
+                getForwardKinematics=lambda q: [0.8, 0.0, 0.05, 0.0, 0.0, 0.0]
+            ),
+            workspace_violations=lambda pos: ["x_max", "z_min"],
+        )
+        ctx = SimpleNamespace(
+            runtime=SimpleNamespace(
+                cfg=SimpleNamespace(robot=SimpleNamespace(home_joints_deg=[0.0] * 6))
+            ),
+            hardware=SimpleNamespace(robot_wrapper=SimpleNamespace(inner=robot)),
+        )
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            strategy._warn_if_home_outside_workspace(ctx)
+        self.assertIn("x_max, z_min", output.getvalue())
 
     def test_wrapper_disables_native_auto_home_and_restores_factories_on_error(self):
         from scripts import rollout as wrapper
@@ -380,7 +403,7 @@ class RolloutTests(unittest.TestCase):
             interactive=False,
             return_to_initial_position=True,
             strategy=EpisodicStrategyConfig(reset_to_initial_position=True),
-            robot=SimpleNamespace(home_joints_deg=[0.0] * 6),
+            robot=SimpleNamespace(home_joints_deg=[0.0] * 6, z_min_m=0.1),
             inference=SimpleNamespace(type="rtc"),
             fps=15,
         )

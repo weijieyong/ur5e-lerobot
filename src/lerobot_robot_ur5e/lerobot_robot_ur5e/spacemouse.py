@@ -374,14 +374,26 @@ class SpaceMouse(Teleoperator):
             lead = pos - tcp_meas[:3]
             if np.linalg.norm(lead) > c.max_lead_m:
                 pos = tcp_meas[:3] + lead / np.linalg.norm(lead) * c.max_lead_m
+            rc = getattr(robot, "config", None)
             lower = np.array(
                 [
                     v if v is not None else -np.inf
-                    for v in (c.x_min_m, c.y_min_m, c.z_min_m)
+                    for v in (
+                        getattr(rc, "x_min_m", None),
+                        getattr(rc, "y_min_m", None),
+                        getattr(rc, "z_min_m", None),
+                    )
                 ]
             )
             upper = np.array(
-                [v if v is not None else np.inf for v in (c.x_max_m, c.y_max_m, None)]
+                [
+                    v if v is not None else np.inf
+                    for v in (
+                        getattr(rc, "x_max_m", None),
+                        getattr(rc, "y_max_m", None),
+                        None,
+                    )
+                ]
             )
             # Outside a saved boundary, allow gradual inward recovery without a snap.
             # Within the box, clamp outward motion while allowing sliding along each face.

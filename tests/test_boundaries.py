@@ -109,7 +109,7 @@ class BoundaryTests(unittest.TestCase):
                 patch.dict(os.environ, env),
                 patch.object(sys, "argv", ["set-boundaries"]),
                 patch.dict(sys.modules, {"pynput": SimpleNamespace(keyboard=keyboard)}),
-                patch.object(command, "UR5e", return_value=robot),
+                patch.object(command, "UR5e", return_value=robot) as robot_type,
                 patch.object(command, "SpaceMouse", return_value=mouse) as mouse_type,
                 patch("builtins.input", side_effect=answers),
                 patch.object(command.time, "sleep"),
@@ -119,6 +119,7 @@ class BoundaryTests(unittest.TestCase):
                     config=config,
                     original=original,
                     robot=robot,
+                    robot_type=robot_type,
                     mouse=mouse,
                     mouse_type=mouse_type,
                     stopped=stopped,
@@ -150,14 +151,15 @@ class BoundaryTests(unittest.TestCase):
             s.robot.disconnect.assert_called_once()
             self.assertTrue(s.stopped)
             teaching = s.mouse_type.call_args.args[0]
+            robot_cfg = s.robot_type.call_args.args[0]
             self.assertTrue(teaching.stop_on_escape)
             self.assertEqual(
                 (
-                    teaching.x_min_m,
-                    teaching.x_max_m,
-                    teaching.y_min_m,
-                    teaching.y_max_m,
-                    teaching.z_min_m,
+                    robot_cfg.x_min_m,
+                    robot_cfg.x_max_m,
+                    robot_cfg.y_min_m,
+                    robot_cfg.y_max_m,
+                    robot_cfg.z_min_m,
                 ),
                 (None,) * 5,
             )
