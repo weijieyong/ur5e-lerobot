@@ -107,6 +107,47 @@ class RTCQueueTests(unittest.TestCase):
         )
         torch.testing.assert_close(runtime.queue.get(), actions[1] + 200)
 
+    def test_rtc_engine_enables_starvation_grace_with_ur5e_command_hold(self):
+        from lerobot.configs.types import RTCAttentionSchedule
+        from lerobot.inference.rtc import RTCInferenceEngine
+        from lerobot.policies.rtc.configuration_rtc import RTCConfig
+        from lerobot.rollout.context import ThreadSafeRobot
+        from lerobot_robot_ur5e.config_ur5e import UR5eConfig
+        from lerobot_robot_ur5e.ur5e import UR5e
+
+        robot = UR5e(UR5eConfig(cameras={}, timing_log_dir=""))
+        wrapper = ThreadSafeRobot(robot)
+        policy = SimpleNamespace(
+            config=SimpleNamespace(
+                n_action_steps=50,
+                chunk_size=50,
+                output_features={"action": SimpleNamespace(shape=(7,))},
+            ),
+            chunk_inference_spec=lambda: ChunkPolicySpec(
+                50, 50, modes=(ExecutionMode.RTC_GUIDED,)
+            ),
+            predict_action_chunk=lambda batch, **kwargs: None,
+            supports_text_generation=lambda: False,
+        )
+        engine = RTCInferenceEngine(
+            policy=policy,
+            preprocessor=SimpleNamespace(steps=[]),
+            postprocessor=SimpleNamespace(steps=[]),
+            robot_wrapper=wrapper,
+            rtc_config=RTCConfig(
+                enabled=True,
+                execution_horizon=10,
+                prefix_attention_schedule=RTCAttentionSchedule.EXP,
+            ),
+            dataset_features={},
+            task="pick",
+            fps=15,
+            device="cpu",
+            action_starvation_grace_s=1.0,
+        )
+        self.assertTrue(wrapper.supports_hold)
+        self.assertEqual(engine._runtime.starvation_grace, 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
