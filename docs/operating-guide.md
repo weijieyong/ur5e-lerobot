@@ -466,7 +466,12 @@ physical-speed ratio. Clipping can alter tracking/grasp timing. Keep control/dat
 FPS at 15 and `--interpolation_multiplier=1`; do not change FPS to slow playback.
 Servo gain/lookahead affect controller response. Chunk size, non-RTC action steps
 and RTC execution horizon have different meanings; unequal values are not a bug.
-SpaceMouse floor/side/tilt guards do not constrain policy joint actions.
+Configured workspace floor/side bounds (`UR5E_Z_MIN_M` and optional `UR5E_{X,Y}_{MIN,MAX}_M`)
+are enforced inside `UR5e.send_action()` during both teleoperation and policy rollouts: out-of-bounds
+targets clamp and slide along the violated face (falling back to holding current joints if IK fails)
+without aborting the episode, while gripper commands continue normally. Rollout refuses to start
+unless `UR5E_Z_MIN_M` is configured and warns if the home pose lies outside the workspace;
+`go_home()` remains exempt. SpaceMouse neutral/tilt guards still apply only to teleoperation.
 
 Run short supervised attempts. Success means the object rests on the tray within
 30 seconds. Label outcomes manually, retaining failed attempts in success counts;
