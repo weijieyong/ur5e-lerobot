@@ -59,6 +59,76 @@ class OnboardingTests(unittest.TestCase):
                 destination = str(root / "custom data" / expected)
                 self.assertTrue(destination in args or f"--root={destination}" in args)
 
+    def test_rollout_task_forwards_workspace_default_from_activation_before_extra(self):
+        rollout_cmd = tomllib.loads((ROOT / "pixi.toml").read_text())["tasks"][
+            "rollout"
+        ]["cmd"]
+        self.assertTrue(rollout_cmd.startswith("python -m scripts.rollout "))
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            capture = root / "capture.py"
+            capture.write_text("import json,sys; print(json.dumps(sys.argv[1:]))")
+            machine_env = root / "config/local/machine.env"
+            machine_env.parent.mkdir(parents=True, exist_ok=True)
+            capture_cmd = rollout_cmd.replace(
+                "python -m scripts.rollout",
+                f"{shlex.quote(sys.executable)} {shlex.quote(str(capture))}",
+                1,
+            )
+            env = {
+                "PATH": os.environ.get("PATH", ""),
+                "PIXI_PROJECT_ROOT": str(root),
+            }
+            cases = (
+                ("", "", ["--robot.enforce_workspace=true"]),
+                (
+                    "ROLLOUT_ENFORCE_WORKSPACE=\n",
+                    "",
+                    ["--robot.enforce_workspace=true"],
+                ),
+                (
+                    "ROLLOUT_ENFORCE_WORKSPACE=false\n",
+                    "",
+                    ["--robot.enforce_workspace=false"],
+                ),
+                (
+                    "ROLLOUT_ENFORCE_WORKSPACE=true\n",
+                    "",
+                    ["--robot.enforce_workspace=true"],
+                ),
+                (
+                    "ROLLOUT_ENFORCE_WORKSPACE=true\n",
+                    "--robot.enforce_workspace=false",
+                    [
+                        "--robot.enforce_workspace=true",
+                        "--robot.enforce_workspace=false",
+                    ],
+                ),
+            )
+            for content, extra, expected in cases:
+                with self.subTest(content=content.strip(), extra=extra):
+                    machine_env.write_text(content)
+                    cmd = capture_cmd.replace("{{ episodes }}", "1").replace(
+                        "{{ extra }}", extra
+                    )
+                    script = f". {shlex.quote(str(ROOT / 'scripts/activate.sh'))} && {cmd}"
+                    result = subprocess.run(
+                        script,
+                        shell=True,
+                        env=env,
+                        text=True,
+                        capture_output=True,
+                        check=True,
+                        timeout=10,
+                    )
+                    args = json.loads(result.stdout)
+                    flags = [
+                        arg
+                        for arg in args
+                        if arg.startswith("--robot.enforce_workspace=")
+                    ]
+                    self.assertEqual(flags, expected)
+
     def test_native_filter_copy_preserves_source_and_metadata(self):
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
         from lerobot.scripts.lerobot_edit_dataset import (

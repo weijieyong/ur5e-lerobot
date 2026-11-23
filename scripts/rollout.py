@@ -54,6 +54,7 @@ class ManualEpisodicStrategy(NativeStrategy):
         try:
             super().setup(ctx)
             self._engine.pause()
+            self._warn_if_home_outside_workspace(ctx)
         except BaseException:
             if self._listener is not None:
                 with contextlib.suppress(Exception):
@@ -61,6 +62,32 @@ class ManualEpisodicStrategy(NativeStrategy):
             raise
         finally:
             module.init_keyboard_listener = original
+
+    def _warn_if_home_outside_workspace(self, ctx):
+        hardware = getattr(ctx, "hardware", None)
+        wrapper = getattr(hardware, "robot_wrapper", None)
+        robot = getattr(wrapper, "inner", None)
+        rtde_c = getattr(robot, "rtde_c", None)
+        if not (
+            callable(getattr(robot, "workspace_violations", None))
+            and callable(getattr(rtde_c, "getForwardKinematics", None))
+        ):
+            return
+        if not getattr(ctx.runtime.cfg.robot, "enforce_workspace", True):
+            return
+        home_deg = getattr(ctx.runtime.cfg.robot, "home_joints_deg", None)
+        if not home_deg or len(home_deg) != 6:
+            return
+        fk = rtde_c.getForwardKinematics([math.radians(d) for d in home_deg])
+        if fk is None or len(fk) != 6 or not all(math.isfinite(float(v)) for v in fk):
+            return
+        faces = robot.workspace_violations(fk[:3])
+        if faces:
+            print(
+                f"Warning: home pose TCP lies outside configured workspace ({', '.join(faces)}). "
+                "Inward recovery is allowed, but review UR5E_*_M or home_joints_deg.",
+                flush=True,
+            )
 
     def run(self, ctx):
         try:
@@ -242,6 +269,12 @@ def run_rollout(cfg):
             "Rollout requires episodic strategy and --interactive=false; terminal input is wrapper-owned"
         )
     joint_vector(getattr(cfg.robot, "home_joints_deg", None), "robot.home_joints_deg")
+    enforce_workspace = getattr(cfg.robot, "enforce_workspace", True)
+    z_min = getattr(cfg.robot, "z_min_m", None)
+    if enforce_workspace and (z_min is None or not math.isfinite(z_min)):
+        raise ValueError(
+            "Rollout requires a finite floor bound (UR5E_Z_MIN_M); run pixi run set-floor or set-boundaries first"
+        )
     start_tolerance()
     preflight()
     cfg.strategy.reset_to_initial_position = False
@@ -252,9 +285,12 @@ def run_rollout(cfg):
     )
     # Native logging is initialized later; print before model loading or hardware setup.
     rtc = getattr(cfg.inference, "rtc", None)
+    workspace_status = (
+        f"workspace=on z_min_m={z_min:g}" if enforce_workspace else "workspace=OFF"
+    )
     print(
         f"Rollout settings: max_joint_step_rad={getattr(cfg.robot, 'max_joint_step_rad', 'n/a')} "
-        f"fps={cfg.fps:g} inference={cfg.inference.type} "
+        f"{workspace_status} fps={cfg.fps:g} inference={cfg.inference.type} "
         f"rtc_enabled={getattr(rtc, 'enabled', 'n/a')} rtc_mode={getattr(rtc, 'mode', 'n/a')} "
         f"rtc_execution_horizon={getattr(rtc, 'execution_horizon', 'n/a')}",
         flush=True,

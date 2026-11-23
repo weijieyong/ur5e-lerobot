@@ -4,6 +4,7 @@ import contextlib
 from dataclasses import dataclass
 import io
 import json
+import os
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
@@ -13,6 +14,8 @@ from unittest.mock import patch
 from lerobot.configs import parser
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.robots import RobotConfig
+from lerobot_robot_ur5e.config_ur5e import UR5eConfig
+from lerobot_robot_ur5e.ur5e import UR5e
 from scripts import rollout
 
 
@@ -162,6 +165,51 @@ class RolloutConfigTests(unittest.TestCase):
             )
         self.assertEqual(cfg.policy.pretrained_path, self.checkpoint)
         self.hub.assert_not_called()
+
+    def test_ur5e_enforce_workspace_cli_default_and_override(self):
+        env = {
+            "HOME": str(self.root),
+            "HF_HOME": str(self.root / "hf"),
+            "HF_LEROBOT_HOME": str(self.root / "lerobot"),
+            "HF_HUB_OFFLINE": "1",
+        }
+        base_args = [
+            "--robot.type=ur5e",
+            "--device=cpu",
+            f"--policy.path={self.checkpoint}",
+        ]
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(
+                UR5e,
+                "__init__",
+                side_effect=AssertionError("robot constructed"),
+            ),
+        ):
+            for extra, expected in (
+                ([], True),
+                (["--robot.enforce_workspace=false"], False),
+                (
+                    [
+                        "--robot.enforce_workspace=true",
+                        "--robot.enforce_workspace=false",
+                    ],
+                    False,
+                ),
+                (
+                    [
+                        "--robot.enforce_workspace=false",
+                        "--robot.enforce_workspace=true",
+                    ],
+                    True,
+                ),
+            ):
+                with self.subTest(extra=extra):
+                    cfg = self.invoke(base_args + extra)
+                    self.assertIsInstance(cfg.robot, UR5eConfig)
+                    self.assertIs(cfg.robot.enforce_workspace, expected)
+        self.hub.assert_not_called()
+        self.hardware.assert_not_called()
 
 
 if __name__ == "__main__":

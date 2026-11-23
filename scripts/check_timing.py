@@ -69,6 +69,12 @@ def main():
     print(
         f"Clipped actions: {sum(r['clipped'] for r in samples)}/{len(samples)}; home moves: {sum(r['event'] == 'home' for r in events)}{hold_suffix}"
     )
+    ws_clamped = sum(bool(r.get("workspace_clamped")) for r in samples)
+    ws_held = sum(bool(r.get("workspace_held")) for r in samples)
+    if ws_clamped or ws_held:
+        print(
+            f"Workspace clamped: {ws_clamped}/{len(samples)} (held fallback: {ws_held})"
+        )
     cameras = sorted({key for row in samples for key in row["camera_ready_s"]})
     for camera in cameras:
         stamps = [r["camera_ready_s"].get(camera) for r in samples]

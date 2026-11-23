@@ -39,6 +39,11 @@ def _env_int(name: str) -> int | None:
     return int(raw) if raw else None
 
 
+def _env_float(name: str) -> float | None:
+    raw = _env(name)
+    return float(raw) if raw else None
+
+
 def _env_gripper_force() -> int | None:
     # ROLLOUT_GRIPPER_FORCE is the former rollout-only name; honour it for older machine configs.
     for name in ("GRIPPER_FORCE", "ROLLOUT_GRIPPER_FORCE"):
@@ -104,6 +109,17 @@ class UR5eConfig(RobotConfig):
     # 0.05 rad at 15 Hz is ~0.75 rad/s of target increments; this is not a measured velocity guarantee.
     max_joint_step_rad: float = 0.05
 
+    # TCP position bounds in the robot base frame (m). Empty = unbounded; no ceiling.
+    x_min_m: float | None = field(default_factory=lambda: _env_float("UR5E_X_MIN_M"))
+    x_max_m: float | None = field(default_factory=lambda: _env_float("UR5E_X_MAX_M"))
+    y_min_m: float | None = field(default_factory=lambda: _env_float("UR5E_Y_MIN_M"))
+    y_max_m: float | None = field(default_factory=lambda: _env_float("UR5E_Y_MAX_M"))
+    z_min_m: float | None = field(default_factory=lambda: _env_float("UR5E_Z_MIN_M"))
+    # Workspace-clamp IK solutions further than this from measured joints (any joint) fall back to hold.
+    max_ik_jump_rad: float = 0.5
+    # Gates UR5e workspace enforcement and the rollout floor prerequisite; does not affect SpaceMouse.
+    enforce_workspace: bool = True
+
     # Gripper, reached through the controller: "robotiq" (2F-85, Robotiq URCap socket)
     # or "onrobot_rg2" (RG2 on the tool flange, OnRobot URCap XML-RPC).
     gripper_type: str = field(default_factory=lambda: _env("GRIPPER_TYPE") or "robotiq")
@@ -122,12 +138,21 @@ class UR5eConfig(RobotConfig):
         for name in (
             "control_period_s",
             "max_joint_step_rad",
+            "max_ik_jump_rad",
             "home_speed_rad_s",
             "camera_max_age_ms",
         ):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")
+        for name in ("x_min_m", "x_max_m", "y_min_m", "y_max_m", "z_min_m"):
+            value = getattr(self, name)
+            if value is not None and not math.isfinite(value):
+                raise ValueError(f"{name} must be finite or empty")
+        for axis in ("x", "y"):
+            low, high = getattr(self, f"{axis}_min_m"), getattr(self, f"{axis}_max_m")
+            if low is not None and high is not None and low >= high:
+                raise ValueError(f"{axis}_min_m must be less than {axis}_max_m")
         if self.home_joints_deg and (
             len(self.home_joints_deg) != 6
             or not all(map(math.isfinite, self.home_joints_deg))
@@ -189,32 +214,6 @@ class SpaceMouseConfig(TeleoperatorConfig):
 
     # How far the commanded gripper position may run ahead of the measured one.
     max_lead_m: float = 0.02
-    # TCP position bounds in the robot base frame (m). Empty = unbounded; no ceiling.
-    x_min_m: float | None = field(
-        default_factory=lambda: (
-            float(_env("UR5E_X_MIN_M")) if _env("UR5E_X_MIN_M") else None
-        )
-    )
-    x_max_m: float | None = field(
-        default_factory=lambda: (
-            float(_env("UR5E_X_MAX_M")) if _env("UR5E_X_MAX_M") else None
-        )
-    )
-    y_min_m: float | None = field(
-        default_factory=lambda: (
-            float(_env("UR5E_Y_MIN_M")) if _env("UR5E_Y_MIN_M") else None
-        )
-    )
-    y_max_m: float | None = field(
-        default_factory=lambda: (
-            float(_env("UR5E_Y_MAX_M")) if _env("UR5E_Y_MAX_M") else None
-        )
-    )
-    z_min_m: float | None = field(
-        default_factory=lambda: (
-            float(_env("UR5E_Z_MIN_M")) if _env("UR5E_Z_MIN_M") else None
-        )
-    )
     # IK solutions further than this from the measured joints (any joint) are rejected.
     max_ik_jump_rad: float = 0.5
 
@@ -274,11 +273,3 @@ class SpaceMouseConfig(TeleoperatorConfig):
                 raise ValueError(f"{name} must be finite and positive")
         if not 0 <= self.deadband < 1 or not math.isfinite(self.operator_yaw_deg):
             raise ValueError("Invalid SpaceMouse deadband or operator yaw")
-        for name in ("x_min_m", "x_max_m", "y_min_m", "y_max_m", "z_min_m"):
-            value = getattr(self, name)
-            if value is not None and not math.isfinite(value):
-                raise ValueError(f"{name} must be finite or empty")
-        for axis in ("x", "y"):
-            low, high = getattr(self, f"{axis}_min_m"), getattr(self, f"{axis}_max_m")
-            if low is not None and high is not None and low >= high:
-                raise ValueError(f"{axis}_min_m must be less than {axis}_max_m")

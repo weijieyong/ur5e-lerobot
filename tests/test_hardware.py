@@ -49,6 +49,11 @@ class HardwareTests(unittest.TestCase):
                 calibration_dir=root / "robot",
                 timing_log_dir="",
                 gripper_type="robotiq",
+                x_min_m=None,
+                x_max_m=None,
+                y_min_m=None,
+                y_max_m=None,
+                z_min_m=None,
             )
         )
         self.sent = []
