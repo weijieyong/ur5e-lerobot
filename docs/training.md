@@ -193,8 +193,10 @@ pixi run train data/local/new-recording-filtered local/new-recording-filtered --
 
 This is **not resume**: only adapter weights are restored. The optimizer and
 learning-rate schedule restart, normalization is fitted on the current training
-split, and `steps` counts new updates. The sample otherwise keeps the default
-single-GPU settings; adjust learning rate and update budget for your experiment.
+split, and `steps` counts new updates. The sample uses a lower peak learning rate
+of `5e-5`, decay learning rate `5e-6`, and 500 warmup steps. Other settings match
+the single-GPU default. These are starting points for refinement, not a measured
+optimum; adjust the learning rate and update budget for your experiment.
 `train-check` validates configuration and adapter metadata, not the full tensor
 load; the worker checks adapter keys and shapes before optimization.
 

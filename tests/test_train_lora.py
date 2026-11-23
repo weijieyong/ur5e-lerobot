@@ -531,6 +531,13 @@ class RecipeSelectionTests(unittest.TestCase):
                 {"parallelism.dp_replicate": ranks, "batch_size": batch}
             )
             if recipe["name"] == "training-warm-start":
+                expected["native_flags"].update(
+                    {
+                        "policy.optimizer_lr": 5e-5,
+                        "policy.scheduler_decay_lr": 5e-6,
+                        "policy.scheduler_warmup_steps": 500,
+                    }
+                )
                 expected["guards"]["init_adapter"] = (
                     "outputs/training-runs/REPLACE_WITH_RUN/native/checkpoints/030000/pretrained_model"
                 )
