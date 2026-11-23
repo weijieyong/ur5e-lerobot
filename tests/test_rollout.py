@@ -395,6 +395,15 @@ class RolloutTests(unittest.TestCase):
             strategy._warn_if_home_outside_workspace(ctx)
         self.assertIn("x_max, z_min", output.getvalue())
 
+        robot.rtde_c.getForwardKinematics = lambda q: self.fail(
+            "home FK called with workspace enforcement disabled"
+        )
+        ctx.runtime.cfg.robot.enforce_workspace = False
+        off_output = io.StringIO()
+        with contextlib.redirect_stdout(off_output):
+            strategy._warn_if_home_outside_workspace(ctx)
+        self.assertEqual(off_output.getvalue(), "")
+
     def test_wrapper_disables_native_auto_home_and_restores_factories_on_error(self):
         from scripts import rollout as wrapper
 
@@ -423,6 +432,22 @@ class RolloutTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "primary failure"):
                 run_rollout(cfg)
+        self.assertIs(wrapper.upstream.create_strategy, original)
+
+        cfg.return_to_initial_position = True
+        cfg.strategy.reset_to_initial_position = True
+        cfg.robot.z_min_m = None
+        cfg.robot.enforce_workspace = False
+        output = io.StringIO()
+        with (
+            patch.object(wrapper.upstream.rollout, "__wrapped__", side_effect=native),
+            patch.object(wrapper, "preflight"),
+            patch.object(wrapper, "RecordingFeedback"),
+            contextlib.redirect_stdout(output),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "primary failure"):
+                run_rollout(cfg)
+        self.assertIn("workspace=OFF", output.getvalue())
         self.assertIs(wrapper.upstream.create_strategy, original)
 
     def test_teardown_preserves_primary_error(self):

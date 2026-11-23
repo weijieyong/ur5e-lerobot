@@ -4,6 +4,7 @@
 if [ -f "$PIXI_PROJECT_ROOT/config/local/machine.env" ]; then
   set -a; . "$PIXI_PROJECT_ROOT/config/local/machine.env"; set +a
 fi
+export ROLLOUT_ENFORCE_WORKSPACE="${ROLLOUT_ENFORCE_WORKSPACE:-true}"
 
 # Keep this pinned Python/native stack independent of sourced ROS, Conda or MuJoCo.
 # Preserve desktop/session variables (DISPLAY, XAUTHORITY, etc.) for hardware UI.

@@ -117,6 +117,8 @@ class UR5eConfig(RobotConfig):
     z_min_m: float | None = field(default_factory=lambda: _env_float("UR5E_Z_MIN_M"))
     # Workspace-clamp IK solutions further than this from measured joints (any joint) fall back to hold.
     max_ik_jump_rad: float = 0.5
+    # Gates UR5e workspace enforcement and the rollout floor prerequisite; does not affect SpaceMouse.
+    enforce_workspace: bool = True
 
     # Gripper, reached through the controller: "robotiq" (2F-85, Robotiq URCap socket)
     # or "onrobot_rg2" (RG2 on the tool flange, OnRobot URCap XML-RPC).

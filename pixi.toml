@@ -83,6 +83,7 @@ cmd = """python -m scripts.rollout --robot.type=ur5e \
   --robot.max_joint_step_rad=$ROLLOUT_MAX_JOINT_STEP_RAD \
   --robot.gripper_speed=$ROLLOUT_GRIPPER_SPEED \
   --robot.home_speed_rad_s=$ROLLOUT_HOME_SPEED_RAD_S \
+  --robot.enforce_workspace=$ROLLOUT_ENFORCE_WORKSPACE \
   --policy.path="$ROLLOUT_POLICY_PATH" --policy.num_inference_steps=$ROLLOUT_DENOISE_STEPS --device=cuda \
   --strategy.type=episodic --strategy.smooth_handover=false --inference.type=rtc \
   --inference.rtc.execution_horizon=$RTC_EXECUTION_HORIZON --fps=$CONTROL_FPS \

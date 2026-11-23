@@ -341,6 +341,34 @@ class UR5eWorkspaceEnforcementTests(unittest.TestCase):
         robot.go_home()
         self.assertEqual(len(moved), 1)
 
+    def test_disabled_workspace_skips_clamping_while_keeping_step_clip_and_bounds(self):
+        robot, calls = self.make_robot(
+            q_meas=[0.48, 0.0, 0.11, 0.1, 0.2, 0.3],
+            enforce_workspace=False,
+        )
+        # Target exceeds both max_joint_step_rad (0.05) and workspace x_max/z_min bounds.
+        act = self.action([0.60, 0.03, 0.01, 0.1, 0.2, 0.3], gripper=1.0)
+        robot.send_action(act)
+        expected = [0.53, 0.03, 0.06, 0.1, 0.2, 0.3]
+        np.testing.assert_allclose(calls.sent[0], expected)
+        self.assertEqual(calls.fk, [])
+        self.assertEqual(calls.tcp, [])
+        self.assertEqual(calls.ik, [])
+        self.assertEqual(calls.grips, [True])
+        np.testing.assert_allclose([act[j] for j in JOINTS], expected)
+        self.assertEqual(act[GRIPPER], 1.0)
+        self.assertEqual(
+            (
+                robot.config.x_min_m,
+                robot.config.x_max_m,
+                robot.config.y_min_m,
+                robot.config.y_max_m,
+                robot.config.z_min_m,
+            ),
+            (-0.5, 0.5, -0.3, 0.3, 0.1),
+        )
+        self.assertEqual(robot.workspace_violations(np.array([0.8, 0.0, 0.05])), [])
+
 
 if __name__ == "__main__":
     unittest.main()

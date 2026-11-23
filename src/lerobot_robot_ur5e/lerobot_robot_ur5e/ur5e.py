@@ -364,6 +364,8 @@ class UR5e(Robot):
         self._timing_file.write(json.dumps(event) + "\n")
 
     def workspace_bounds(self) -> tuple[np.ndarray, np.ndarray] | None:
+        if not self.config.enforce_workspace:
+            return None
         c = self.config
         if all(
             v is None for v in (c.x_min_m, c.x_max_m, c.y_min_m, c.y_max_m, c.z_min_m)
