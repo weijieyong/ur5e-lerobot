@@ -177,34 +177,39 @@ and save guards stay in force.
 Run the operator-authorized GPU smoke/save and strict reload checks before a long
 run. Every run has a new `outputs/training-runs/` directory.
 
-## Deployment copy across hosts
+## Deploy for rollout
 
-Copy the complete selected checkpoint's `pretrained_model` directory, including
-adapter tensors/config, policy/train configs, both processor JSONs and normalizer
-tensors, and tokenizer directory. Separately copy the approved original base
-snapshot including config and immutable `model.safetensors`; verify its SHA256
-against the reference recipe. Retain a manifest of every original and destination file hash.
-Never edit the original checkpoint or original base bytes.
+On a single machine (training machine and robot PC in the same checkout), point
+`ROLLOUT_POLICY_PATH` directly to the checkpoint's `pretrained_model` directory.
+No copies or JSON edits are needed: `adapter_config.json` already points to the
+local `hf/hub/` base snapshot, and `tokenizer/` resolves relative to the
+checkpoint.
 
-For a deployment copy only, explicitly rewrite local path metadata to the destination:
-`adapter_config.json`'s `base_model_name_or_path` → approved base snapshot;
-`config.json`'s `pretrained_path` → deployment checkpoint itself, and its
-`text_tokenizer_name` → copied tokenizer directory; tokenizer processor
-step's `config.tokenizer_name` → copied tokenizer directory. Inspect the actual
-processor steps to find that tokenizer field; do not replace unrelated text or
-rewrite tensor files. If saved `train_config.json` carries policy/base/dataset
-paths, retain it as training provenance; it is not an instruction to resume.
-Record the exact allowlisted JSON differences and verify all other bytes unchanged.
-Ensure base config/processor assets referenced by the copied metadata are present
-locally and compatible, never substituted from another run.
+When moving a checkpoint to a separate robot PC (or after moving the base snapshot):
 
-Set private `ROLLOUT_POLICY_PATH` to the copied directory and keep assets offline.
-Use absolute paths, `./` paths or nested local paths such as
-`outputs/deploy/pretrained_model`; `outputs/` is reserved for local deployments.
-Missing local paths fail before Hub config resolution. Other valid Hub ID strings
-(`namespace/name` or bare repo names) retain upstream loading; prefix with `./` to
-mean local.
+- Copy the full `pretrained_model` directory: adapter config and weights,
+  `config.json`, `train_config.json`, both processor JSONs, normalizer
+  `.safetensors`, and `tokenizer/`.
+- Copy the original base snapshot once, including its config files and
+  `model.safetensors`. Dereference Hugging Face cache symlinks (for example
+  `rsync -aL`) if copying a standalone snapshot directory. Verify
+  `model.safetensors` against `guards.base_sha256` in the recipe, keep a SHA256
+  manifest of copied files, and leave the original checkpoint and base files
+  untouched.
+- In the copy only, set `adapter_config.json` → `base_model_name_or_path` to
+  the destination base directory. Leave `config.json`, tokenizer processor
+  paths, `train_config.json` (training provenance only), and tensor files
+  unchanged: `pixi run rollout` overrides `pretrained_path` in memory, and
+  relative tokenizer artifacts resolve against the checkpoint. Record the JSON
+  change and verify all other bytes match.
 
-Perform a strict real-model reload and recorded-input RTC qualification on the destination
-before supervised robot use. Metadata inspection or synthetic tests do not establish
-successful reload or RTC qualification.
+Set `ROLLOUT_POLICY_PATH` in `config/local/machine.env` and keep
+`HF_HUB_OFFLINE=1`. Use an absolute path, a `./` prefix, or a path under
+`outputs/` (such as `outputs/deploy/pretrained_model`). `outputs/` is reserved
+for local checkpoints, and missing local paths fail before any Hub lookup.
+Strings that match a Hub ID (`namespace/name` or a bare repo name) fall back to
+upstream loading; prefix them with `./` to force local loading.
+
+Before supervised rollouts on the robot PC, run a strict reload and
+recorded-input RTC check with the real weights. Metadata checks and synthetic
+tests do not verify loading or RTC behavior.
