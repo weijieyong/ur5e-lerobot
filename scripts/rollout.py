@@ -163,10 +163,21 @@ class ManualEpisodicStrategy(NativeStrategy):
             result = super()._policy_loop(**kwargs)
             self.control.check()
         finally:
+            primary = sys.exception()
             with self.control.lock:
                 self.control.phase = "BUSY"
                 self.control.home = False
             self._engine.pause()
+            robot = kwargs["robot"]
+            try:
+                if getattr(robot, "supports_hold", False):
+                    robot.hold()
+                elif callable(getattr(getattr(robot, "inner", None), "hold", None)):
+                    robot.inner.hold()
+            except Exception as error:
+                if primary is None:
+                    raise
+                primary.add_note(f"Robot hold on episode stop also failed: {error!r}")
         self.feedback.show(
             "DISCARDING — POLICY PAUSED"
             if events["rerecord_episode"]

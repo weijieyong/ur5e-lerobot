@@ -64,8 +64,10 @@ def main():
     print(
         f"Intervals >120% of target: {sum(dt > target_ms * 1.2 for dt in intervals)}/{len(intervals)}"
     )
+    holds = sum(r["event"] == "hold" for r in events)
+    hold_suffix = f"; holds: {holds}" if holds else ""
     print(
-        f"Clipped actions: {sum(r['clipped'] for r in samples)}/{len(samples)}; home moves: {sum(r['event'] == 'home' for r in events)}"
+        f"Clipped actions: {sum(r['clipped'] for r in samples)}/{len(samples)}; home moves: {sum(r['event'] == 'home' for r in events)}{hold_suffix}"
     )
     cameras = sorted({key for row in samples for key in row["camera_ready_s"]})
     for camera in cameras:

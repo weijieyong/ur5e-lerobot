@@ -196,6 +196,7 @@ def make_gripper(config: UR5eConfig) -> RobotiqSocket | OnRobotRG2:
 class UR5e(Robot):
     config_class = UR5eConfig
     name = "ur5e"
+    supports_command_hold = True
 
     def __init__(self, config: UR5eConfig):
         super().__init__(config)
@@ -205,6 +206,7 @@ class UR5e(Robot):
         self.rtde_r = None
         self.gripper: RobotiqSocket | OnRobotRG2 | None = None
         self._gripper_closed: bool | None = None
+        self._servo_active = False
         self._observation_timing = {}
         self._timing_file = None
 
@@ -257,6 +259,7 @@ class UR5e(Robot):
             self.disconnect()
             raise
         self._gripper_closed = None
+        self._servo_active = False
         CONNECTED[ip] = self
         log.info("UR5e connected at %s", ip)
 
@@ -288,6 +291,7 @@ class UR5e(Robot):
                 log.exception(
                     "UR5e cleanup %s failed; continuing remaining cleanup", name
                 )
+        self._servo_active = False
         self.rtde_c = self.rtde_r = self.gripper = self._timing_file = None
 
     # --- io ---------------------------------------------------------------------------------
@@ -356,6 +360,7 @@ class UR5e(Robot):
             raise RuntimeError(
                 "UR5e rejected servoJ; check remote control and the pendant safety state"
             )
+        self._servo_active = True
 
         closed = action[GRIPPER] >= 0.5
         if closed != self._gripper_closed:
@@ -382,6 +387,21 @@ class UR5e(Robot):
         )
         return action
 
+    def hold(self) -> None:
+        """Stop active servoJ streaming cleanly and verify robot safety."""
+        self.check_safety()
+        if not self._servo_active:
+            return
+        start = time.perf_counter()
+        if self.rtde_c.servoStop() is False:
+            raise RuntimeError(
+                "UR5e rejected servoStop; check remote control and the pendant safety state"
+            )
+        self._servo_active = False
+        self._write_timing(
+            {"event": "hold", "start_s": start, "end_s": time.perf_counter()}
+        )
+
     def go_home(self) -> None:
         """Open the gripper where the arm is, then a blocking, slow joint move to the configured home pose."""
         if len(self.config.home_joints_deg) != 6:
@@ -392,6 +412,7 @@ class UR5e(Robot):
         self.check_safety()
         start = time.perf_counter()
         self.rtde_c.servoStop()
+        self._servo_active = False
         # Release any held object before moving so every trial starts at home with the gripper open.
         self.gripper.grip(False)
         self._gripper_closed = False
