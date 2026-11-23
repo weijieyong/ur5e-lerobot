@@ -311,3 +311,43 @@ class HardwareTests(unittest.TestCase):
         self.robot.rtde_c.moveJ = lambda *args: False
         with self.assertRaisesRegex(RuntimeError, "home move"):
             self.robot.go_home()
+
+    def test_command_hold_stops_active_servo_once_and_rearms_on_next_action(self):
+        import json
+        from lerobot.rollout.context import ThreadSafeRobot
+
+        stops = []
+        self.robot.config.timing_log_dir = str(Path(self.directory.name) / "timing")
+        self.robot.rtde_c.servoStop = lambda: stops.append("stop") or True
+        wrapper = ThreadSafeRobot(self.robot)
+        wrapper.configure_hold()
+        self.assertTrue(wrapper.supports_hold)
+
+        # Idle before any servoJ: hold checks safety without sending a redundant servoStop.
+        wrapper.hold()
+        self.assertEqual(stops, [])
+
+        # After servoJ, hold calls servoStop once; repeated held ticks skip redundant stops.
+        action = {**dict.fromkeys(JOINTS, 0.0), GRIPPER: 0.0}
+        wrapper.send_action(action)
+        wrapper.hold()
+        wrapper.hold()
+        self.assertEqual(stops, ["stop"])
+
+        # Next send_action re-arms servo mode; rejected servoStop fails closed.
+        wrapper.send_action(action)
+        self.robot.rtde_c.servoStop = lambda: False
+        with self.assertRaisesRegex(RuntimeError, "servoStop"):
+            wrapper.hold()
+
+        # Protective stop fails closed even when servo mode is already idle.
+        self.robot._servo_active = False
+        self.robot.rtde_c.servoStop = lambda: True
+        self.robot.rtde_r.isProtectiveStopped = lambda: True
+        with self.assertRaisesRegex(RuntimeError, "protective"):
+            self.robot.hold()
+
+        self.robot.disconnect()
+        logs = list((Path(self.directory.name) / "timing").glob("ur5e-*.jsonl"))
+        events = [json.loads(line)["event"] for line in logs[0].read_text().splitlines()]
+        self.assertIn("hold", events)

@@ -786,6 +786,33 @@ class RolloutTests(unittest.TestCase):
             self.assertEqual(dataset.num_episodes, 6)
         self.assertEqual(attempts, [5, 5])
 
+    def test_policy_loop_holds_robot_on_episode_end_and_preserves_primary_error(self):
+        holds = []
+
+        def ready(strategy, **kwargs):
+            pass
+
+        def policy(strategy, **kwargs):
+            kwargs["dataset"].frames = 1
+
+        with self.session(ready, policy, episodes=1) as (strategy, ctx, _dataset):
+            ctx.hardware.robot_wrapper.supports_hold = True
+            ctx.hardware.robot_wrapper.hold = lambda: holds.append("hold")
+            strategy.run(ctx)
+        self.assertEqual(holds, ["hold"])
+
+        def failing_policy(strategy, **kwargs):
+            raise ValueError("primary loop failure")
+
+        with self.session(ready, failing_policy, episodes=1) as (strategy, ctx, _dataset):
+            ctx.hardware.robot_wrapper.supports_hold = True
+            ctx.hardware.robot_wrapper.hold = lambda: (_ for _ in ()).throw(
+                RuntimeError("hold failed")
+            )
+            with self.assertRaisesRegex(ValueError, "primary loop failure") as caught:
+                strategy.run(ctx)
+        self.assertIn("hold failed", caught.exception.__notes__[0])
+
 
 if __name__ == "__main__":
     unittest.main()

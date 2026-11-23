@@ -18,8 +18,10 @@ import traceback
 from scripts.train_lora import (
     PRESET_DIR,
     ROOT,
+    TrainingConfigError,
     build_native_argv,
     build_scheduler,
+    check_init_adapter_config,
     check_recipe,
     check_saved_checkpoint,
     check_selection,
@@ -181,6 +183,89 @@ def fit_training_datasets(cfg, make_datasets=None):
     return train, dev
 
 
+def load_init_adapter(policy, adapter_dir, guards):
+    """Validate and load optional warm-start LoRA weights into a freshly wrapped PEFT policy."""
+    from peft import get_peft_model_state_dict, set_peft_model_state_dict
+    from safetensors.torch import load_file
+
+    adapter_dir = Path(adapter_dir)
+    weights_path = adapter_dir / "adapter_model.safetensors"
+    require(weights_path.is_file(), f"init adapter missing: {weights_path}")
+    adapter_name = getattr(policy, "active_adapter", "default")
+    require(
+        isinstance(adapter_name, str)
+        and adapter_name in getattr(policy, "peft_config", {}),
+        f"policy has no active PEFT adapter config {adapter_name!r}",
+    )
+    target_cfg = policy.peft_config[adapter_name]
+    check_init_adapter_config(adapter_dir, target_cfg.r, target_cfg.lora_alpha)
+    expected = get_peft_model_state_dict(policy, adapter_name=adapter_name)
+    require(
+        len(expected) == guards["trainable_lora_tensors"],
+        f"policy adapter tensor count {len(expected)} != expected {guards['trainable_lora_tensors']}",
+    )
+    try:
+        init = load_file(str(weights_path))
+    except Exception as exc:
+        raise TrainingConfigError(
+            f"cannot load init adapter weights {weights_path}: {exc}"
+        ) from None
+    missing = sorted(set(expected) - set(init))
+    extra = sorted(set(init) - set(expected))
+    require(
+        not missing and not extra,
+        f"init adapter key mismatch (missing={missing[:5]}, extra={extra[:5]})",
+    )
+    for key, ref in expected.items():
+        require(
+            tuple(init[key].shape) == tuple(ref.shape),
+            f"init adapter shape mismatch for {key!r}: got {tuple(init[key].shape)}, expected {tuple(ref.shape)}",
+        )
+    loaded = set_peft_model_state_dict(policy, init, adapter_name=adapter_name)
+    require(not loaded.unexpected_keys, "init adapter keys do not match the LoRA")
+    return loaded
+
+
+def prepare_optimizer_and_scheduler(
+    cfg, policy, guards, receipt, make_optimizer, root=ROOT
+):
+    """Optionally warm-start LoRA weights, verify trainability, and build fresh optimizer/scheduler."""
+    import torch
+
+    if "init_adapter" in guards:  # previous run's LoRA weights, same LoRA config
+        load_init_adapter(policy, Path(root) / guards["init_adapter"], guards)
+    trainable = {n: p for n, p in policy.named_parameters() if p.requires_grad}
+    check_trainable(trainable, guards)
+    require(
+        all(torch.isfinite(p).all().item() for p in trainable.values()),
+        "nonfinite initial adapter",
+    )
+    optimizer, _scaled = make_optimizer(cfg, policy)
+    require(
+        isinstance(optimizer, torch.optim.AdamW) and not optimizer.state,
+        "fresh native AdamW required",
+    )
+    actual = {
+        id(p)
+        for group in optimizer.param_groups
+        for p in group["params"]
+        if p.requires_grad
+    }
+    require(
+        actual == {id(p) for p in trainable.values()},
+        "optimizer trainable set mismatch",
+    )
+    scheduler = build_scheduler(
+        cfg.scheduler, optimizer, cfg.steps
+    )  # keep decay horizon
+    if "init_adapter" in guards:
+        receipt["init_adapter"] = guards["init_adapter"]
+    receipt.update(
+        trainable_lora_tensors=len(trainable), trainable_names=list(trainable)
+    )
+    return optimizer, scheduler
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", type=Path, required=True)
@@ -300,32 +385,8 @@ def main(argv=None):
         original_optimizer = native.make_optimizer_and_scheduler
 
         def checked_optimizer(cfg, policy):
-            trainable = {n: p for n, p in policy.named_parameters() if p.requires_grad}
-            check_trainable(trainable, guards)
-            require(
-                all(torch.isfinite(p).all().item() for p in trainable.values()),
-                "nonfinite initial adapter",
-            )
-            optimizer, _scaled = original_optimizer(cfg, policy)
-            require(
-                isinstance(optimizer, torch.optim.AdamW) and not optimizer.state,
-                "fresh native AdamW required",
-            )
-            actual = {
-                id(p)
-                for group in optimizer.param_groups
-                for p in group["params"]
-                if p.requires_grad
-            }
-            require(
-                actual == {id(p) for p in trainable.values()},
-                "optimizer trainable set mismatch",
-            )
-            scheduler = build_scheduler(
-                cfg.scheduler, optimizer, cfg.steps
-            )  # keep decay horizon
-            receipt.update(
-                trainable_lora_tensors=len(trainable), trainable_names=list(trainable)
+            optimizer, scheduler = prepare_optimizer_and_scheduler(
+                cfg, policy, guards, receipt, original_optimizer, root=ROOT
             )
             write_json(run / f"rank-{rank}.model.json", receipt)
             return optimizer, scheduler
