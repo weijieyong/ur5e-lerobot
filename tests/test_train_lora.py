@@ -7,8 +7,10 @@ import hashlib
 import io
 import json
 import math
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -382,6 +384,30 @@ class PlanAndAssetTests(unittest.TestCase):
                 (base / "adapter_config.json").unlink(missing_ok=True)
                 for path, data in snapshot.items():
                     path.write_bytes(data)
+
+    def test_init_adapter_must_be_relative_and_present(self):
+        preset = mutated(self.preset, guards__init_adapter="runs/old/pretrained_model")
+        with self.assertRaisesRegex(tl.TrainingConfigError, "init adapter missing"):
+            tl.check_assets(preset, self.root)
+        adapter = self.root / "runs/old/pretrained_model"
+        adapter.mkdir(parents=True)
+        (adapter / "adapter_model.safetensors").write_bytes(b"x")
+        with self.assertRaisesRegex(tl.TrainingConfigError, "init adapter config missing"):
+            tl.check_assets(preset, self.root)
+        cfg = {
+            "peft_type": "LORA",
+            "r": preset["native_flags"]["peft.r"],
+            "lora_alpha": preset["native_flags"]["peft.lora_alpha"],
+        }
+        (adapter / "adapter_config.json").write_text(
+            json.dumps({**cfg, "init_lora_weights": "pissa"})
+        )
+        with self.assertRaisesRegex(tl.TrainingConfigError, "init_lora_weights"):
+            tl.check_assets(preset, self.root)
+        (adapter / "adapter_config.json").write_text(json.dumps(cfg))
+        self.assertIn("init_adapter", tl.check_assets(preset, self.root))
+        with self.assertRaisesRegex(tl.TrainingConfigError, "project-relative"):
+            tl.check_recipe(mutated(preset, guards__init_adapter="/abs/path"))
 
     def test_trainable_set_guard(self):
         names = [f"model.gemma_expert.layers.{i}.lora_A.weight" for i in range(80)]
@@ -1009,6 +1035,141 @@ class LaunchSeamTests(unittest.TestCase):
                 2,
             )
         self.assertIn("REJECTED", err.getvalue())
+
+
+class GpuAdmissionTests(unittest.TestCase):
+    IDLE = "0, GPU-a, 15, 0\n1, GPU-b, 15, 0\n"
+    BASE_NOW = dt.datetime(2026, 11, 23, 9, 0, tzinfo=dt.timezone.utc)
+
+    def setUp(self):
+        PlanAndAssetTests.setUp(self)
+        self._seq = 0
+
+    def _plan(self, selection):
+        self._seq += 1
+        return tl.plan(
+            "reference-15k",
+            self.root,
+            self.presets,
+            now=self.BASE_NOW + dt.timedelta(seconds=self._seq),
+            selection=selection,
+        )
+
+    def _make_proc(self, cmd, env, pid, on_wait=None):
+        class _FakeProc:
+            def __init__(self):
+                self.cmd, self.env, self.pid, self._rc = list(cmd), dict(env), pid, None
+
+            def poll(self):
+                return self._rc
+
+            def wait(self, timeout=None):
+                if on_wait is not None:
+                    on_wait()
+                run_json = Path(self.cmd[self.cmd.index("--run") + 1])
+                world = json.loads(run_json.read_text())["effective"]["world_size"]
+                for rank in range(world):
+                    (run_json.parent / f"rank-{rank}.json").write_text(
+                        json.dumps({"status": "success", "rank": rank})
+                    )
+                self._rc = 0
+                return 0
+
+        return _FakeProc()
+
+    @contextlib.contextmanager
+    def _harness(self, popen):
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("RANK", "LOCAL_RANK", "WORLD_SIZE")
+        }
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.object(
+                tl.sys, "prefix", str(self.root / ".pixi" / "envs" / "default")
+            ),
+            patch.object(
+                tl.shutil,
+                "disk_usage",
+                return_value=SimpleNamespace(free=100 * 1024**3),
+            ),
+            patch.object(tl, "stop_owned_group"),
+            patch.object(
+                tl, "query_gpus", side_effect=lambda: tl.gpu_inventory(self.IDLE, "")
+            ),
+            patch.object(tl.subprocess, "Popen", side_effect=popen),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            yield
+
+    def test_gpu_reservation_blocks_overlap_allows_disjoint_and_releases(self):
+        spawned, nested_err = [], []
+        spec_gpu1 = self._plan(GPU1)
+        spec_same = self._plan(GPU1)
+        spec_both = self._plan(TWO)
+        spec_gpu0 = self._plan(GPU0)
+        spec_after = self._plan(GPU1)
+
+        def during_run1():
+            try:
+                # NVML still reports both GPUs idle; GPU1 is reserved by run 1.
+                with self.assertRaises(tl.TrainingConfigError):
+                    tl.launch(spec_same, root=self.root)
+                # Partial acquisition of GPU0 followed by collision on GPU1 must release GPU0.
+                with self.assertRaises(tl.TrainingConfigError):
+                    tl.launch(spec_both, root=self.root)
+                self.assertEqual(len(spawned), 1)
+                # Disjoint GPU0 launches concurrently while run 1 holds GPU1.
+                self.assertEqual(tl.launch(spec_gpu0, root=self.root), 0)
+                self.assertEqual(len(spawned), 2)
+                self.assertEqual(spawned[1].env["CUDA_VISIBLE_DEVICES"], "GPU-a")
+            except BaseException as exc:
+                nested_err.append(exc)
+                raise
+
+        def fake_popen(cmd, **kwargs):
+            idx = len(spawned)
+            proc = self._make_proc(
+                cmd,
+                kwargs["env"],
+                10000 + idx,
+                on_wait=during_run1 if idx == 0 else None,
+            )
+            spawned.append(proc)
+            return proc
+
+        with self._harness(fake_popen):
+            rc1 = tl.launch(spec_gpu1, root=self.root)
+            if nested_err:
+                raise nested_err[0]
+            self.assertEqual(rc1, 0)
+            self.assertEqual(tl.launch(spec_after, root=self.root), 0)
+        self.assertEqual(
+            [p.env["CUDA_VISIBLE_DEVICES"] for p in spawned],
+            ["GPU-b", "GPU-a", "GPU-b"],
+        )
+
+    def test_gpu_lock_released_after_popen_error(self):
+        calls = 0
+
+        def flaky_popen(cmd, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError("spawn failed")
+            return self._make_proc(cmd, kwargs["env"], 20000)
+
+        spec1, spec2 = self._plan(GPU0), self._plan(GPU0)
+        with self._harness(flaky_popen):
+            self.assertEqual(tl.launch(spec1, root=self.root), 1)
+            self.assertEqual(tl.launch(spec2, root=self.root), 0)
+        self.assertEqual(calls, 2)
+        self.assertEqual(
+            json.loads((Path(spec1["run_dir"]) / "status.json").read_text())["status"],
+            "failed",
+        )
 
 
 class ExampleConfigTests(unittest.TestCase):

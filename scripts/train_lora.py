@@ -8,6 +8,7 @@ Actual idle GPU topology is resolved at launch with global batch preserved.
 """
 
 import argparse
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -257,6 +258,8 @@ def check_recipe(preset):
         Path(flags["policy.pretrained_path"]).name == guards["base_revision"],
         "base path must be the approved original-base snapshot revision",
     )
+    if "init_adapter" in guards:  # optional: start LoRA from a previous run's adapter
+        relative_path(guards["init_adapter"])
     return preset
 
 
@@ -439,6 +442,47 @@ def check_runtime(guards):
     return {"lerobot": version("lerobot"), "native_train": str(source)}
 
 
+STANDARD_INIT_LORA_WEIGHTS = ("gaussian", "orthogonal")
+
+
+def check_init_lora_weights(value):
+    """Allow only ordinary non-base-mutating LoRA initializers on a pristine base model."""
+    ok = isinstance(value, bool) or (
+        isinstance(value, str) and value in STANDARD_INIT_LORA_WEIGHTS
+    )
+    require(
+        ok,
+        f"init adapter init_lora_weights={value!r} is incompatible with a pristine base model",
+    )
+
+
+def check_init_adapter_config(adapter_dir, r, lora_alpha):
+    """Check that an optional init_adapter uses compatible standard LoRA settings."""
+    path = Path(adapter_dir) / "adapter_config.json"
+    require(path.is_file(), f"init adapter config missing: {path}")
+    try:
+        cfg = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise TrainingConfigError(f"invalid init adapter config {path}: {exc}") from None
+    require(isinstance(cfg, dict), f"invalid init adapter config {path}")
+    alpha = cfg.get("lora_alpha")
+    require(
+        cfg.get("peft_type") == "LORA"
+        and type(cfg.get("r")) is int
+        and cfg["r"] == r
+        and type(alpha) in (int, float)
+        and math.isfinite(alpha)
+        and math.isclose(float(alpha), float(lora_alpha), rel_tol=0.0, abs_tol=1e-12),
+        f"init adapter config incompatible with LoRA r={r}, alpha={lora_alpha}",
+    )
+    require(
+        not cfg.get("use_rslora") and not cfg.get("alpha_pattern"),
+        "init adapter scaling (use_rslora/alpha_pattern) is incompatible with the supported LoRA route",
+    )
+    check_init_lora_weights(cfg.get("init_lora_weights", True))
+    return cfg
+
+
 def check_assets(preset, root, hash_base=False):
     """Approved native dataset/stats and original base; cheap unless hash_base."""
     flags, guards = preset["native_flags"], preset["guards"]
@@ -479,6 +523,12 @@ def check_assets(preset, root, hash_base=False):
         "base_bytes": guards["base_bytes"],
         "base_sha256": "deferred to launch",
     }
+    if "init_adapter" in guards:
+        adapter_dir = Path(root) / guards["init_adapter"]
+        adapter = adapter_dir / "adapter_model.safetensors"
+        require(adapter.is_file(), f"init adapter missing: {adapter}")
+        check_init_adapter_config(adapter_dir, flags["peft.r"], flags["peft.lora_alpha"])
+        summary["init_adapter"] = str(adapter)
     if hash_base:
         require(sha256(weights) == guards["base_sha256"], "base model SHA256 mismatch")
         summary["base_sha256"] = guards["base_sha256"]
@@ -937,6 +987,31 @@ def write_run_record(spec):
     return run, record
 
 
+@contextlib.contextmanager
+def reserve_gpus(runs, selection):
+    """Hold nonblocking per-UUID flock reservations for a run's lifetime; never wait or unlink."""
+    import fcntl
+
+    lock_dir = Path(runs) / ".gpu-locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    with contextlib.ExitStack() as stack:
+        for uuid in sorted({g["uuid"] for g in selection}):
+            require(
+                isinstance(uuid, str) and re.fullmatch(r"GPU-[A-Za-z0-9_-]+", uuid),
+                f"malformed GPU UUID {uuid!r}",
+            )
+            handle = stack.enter_context((lock_dir / f"{uuid}.lock").open("a+"))
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise TrainingConfigError(
+                    f"selected GPU {uuid} is already reserved by an active launch "
+                    "(not starting, not waiting)"
+                ) from None
+            stack.callback(fcntl.flock, handle, fcntl.LOCK_UN)
+        yield
+
+
 def launch(spec, root=ROOT):
     """Operator-only: admission, fresh run directory, native training on the selected GPUs."""
     import fcntl
@@ -955,56 +1030,62 @@ def launch(spec, root=ROOT):
     runs.mkdir(parents=True, exist_ok=True)
     with (runs / ".launch.lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        require(
-            shutil.disk_usage(runs).free >= 10 * 1024**3,
-            "at least 10 GiB free required",
-        )
-        check_assets(spec["_preset"], root, hash_base=True)
-        run, record = write_run_record(spec)
-        (Path(root) / ".tmp" / "training").mkdir(parents=True, exist_ok=True)
-        status = {
-            "status": "preflight",
-            "controller_pid": os.getpid(),
-            "command": spec["torchrun"],
-        }
-        proc = None
-        try:
-            print(run, flush=True)
-            with (run / "train.out").open("x") as log:
-                # Revalidate the selected UUIDs immediately before torchrun; never wait or retry.
-                status["gpu_admission"] = check_idle_gpus(
-                    query_gpus(), spec["gpu_selection"]
-                )
-                proc = subprocess.Popen(
-                    spec["torchrun"],
-                    cwd=root,
-                    env=child_environment(root, spec["gpu_selection"]),
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                )
-                status.update(status="running", torchrun_pid=proc.pid)
-                write_json(run / "status.json", status)
-                status["returncode"] = proc.wait(
-                    timeout=900 if record["smoke"] else None
-                )
+        with reserve_gpus(runs, spec["gpu_selection"]):
             require(
-                status["returncode"] == 0,
-                f"torchrun exited {status['returncode']}; inspect train.out",
+                shutil.disk_usage(runs).free >= 10 * 1024**3,
+                "at least 10 GiB free required",
             )
-            for rank in range(spec["effective"]["world_size"]):
-                receipt = json.loads((run / f"rank-{rank}.json").read_text())
-                require(receipt["status"] == "success", f"rank {rank} did not complete")
-            status["status"] = "success"
-            return 0
-        except BaseException as exc:
-            if proc is not None and proc.poll() is None:
-                stop_owned_group(proc)
-            status.update(status="failed", error=f"{type(exc).__name__}: {exc}")
-            print(f"FAILED: {exc}; evidence: {run}", file=sys.stderr)
-            return 1
-        finally:
-            write_json(run / "status.json", status)
+            check_assets(spec["_preset"], root, hash_base=True)
+            run, record = write_run_record(spec)
+            (Path(root) / ".tmp" / "training").mkdir(parents=True, exist_ok=True)
+            status = {
+                "status": "preflight",
+                "controller_pid": os.getpid(),
+                "command": spec["torchrun"],
+            }
+            proc = None
+            try:
+                print(run, flush=True)
+                with (run / "train.out").open("x") as log:
+                    # Revalidate the selected UUIDs immediately before torchrun; never wait or retry.
+                    status["gpu_admission"] = check_idle_gpus(
+                        query_gpus(), spec["gpu_selection"]
+                    )
+                    proc = subprocess.Popen(
+                        spec["torchrun"],
+                        cwd=root,
+                        env=child_environment(root, spec["gpu_selection"]),
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
+                    status.update(status="running", torchrun_pid=proc.pid)
+                    write_json(run / "status.json", status)
+                    # Admission done: let a run on another GPU launch while this one trains;
+                    # per-GPU reservations stay held until this child finishes or is stopped.
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                    status["returncode"] = proc.wait(
+                        timeout=900 if record["smoke"] else None
+                    )
+                require(
+                    status["returncode"] == 0,
+                    f"torchrun exited {status['returncode']}; inspect train.out",
+                )
+                for rank in range(spec["effective"]["world_size"]):
+                    receipt = json.loads((run / f"rank-{rank}.json").read_text())
+                    require(
+                        receipt["status"] == "success", f"rank {rank} did not complete"
+                    )
+                status["status"] = "success"
+                return 0
+            except BaseException as exc:
+                if proc is not None and proc.poll() is None:
+                    stop_owned_group(proc)
+                status.update(status="failed", error=f"{type(exc).__name__}: {exc}")
+                print(f"FAILED: {exc}; evidence: {run}", file=sys.stderr)
+                return 1
+            finally:
+                write_json(run / "status.json", status)
 
 
 def main(argv=None):
