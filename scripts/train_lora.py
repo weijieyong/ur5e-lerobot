@@ -1095,7 +1095,7 @@ def main(argv=None):
         allow_abbrev=False,
     )
     parser.add_argument(
-        "preset", nargs="?", help="legacy preset name, e.g. reference-15k"
+        "preset", nargs="?", help="recipe name, e.g. training-2gpu"
     )
     parser.add_argument(
         "--recipe",

@@ -21,7 +21,7 @@ from scripts import train_lora as tl
 from scripts.train_lora_entry import load_spec
 
 BASELINE = tl.bind_dataset(
-    tl.load_preset("reference-15k"), "data/synthetic", "local/synthetic"
+    tl.load_preset("training-2gpu"), "data/synthetic", "local/synthetic"
 )
 # Mathematical schedule variants used by these tests.
 BASELINE["native_flags"]["steps"] = 50000
@@ -237,7 +237,7 @@ class RecipeGuardTests(unittest.TestCase):
 
     def test_preset_names_and_files(self):
         with self.assertRaisesRegex(tl.TrainingConfigError, "invalid preset"):
-            tl.load_preset("../reference-15k")
+            tl.load_preset("../test-recipe")
         with self.assertRaisesRegex(tl.TrainingConfigError, "available"):
             tl.load_preset("lora-missing")
         with TemporaryDirectory() as tmp:
@@ -283,12 +283,12 @@ class PlanAndAssetTests(unittest.TestCase):
         self.preset = fake_assets(self.root, LOWLR)
         self.presets = Path(self.tmp.name) / "presets"
         self.presets.mkdir()
-        (self.presets / "reference-15k.recipe.json").write_text(json.dumps(self.preset))
+        (self.presets / "test-recipe.recipe.json").write_text(json.dumps(self.preset))
 
     def test_plan_validates_natively_without_creating_run_directories(self):
         now = dt.datetime(2026, 11, 11, 7, 0, tzinfo=dt.timezone.utc)
         spec = tl.plan(
-            "reference-15k",
+            "test-recipe",
             self.root,
             self.presets,
             now=now,
@@ -298,7 +298,7 @@ class PlanAndAssetTests(unittest.TestCase):
         self.assertFalse((self.root / tl.RUNS_SUBDIR).exists())
         self.assertEqual(
             spec["run_dir"],
-            str(self.root / tl.RUNS_SUBDIR / "reference-15k-20261111T070000.000000Z"),
+            str(self.root / tl.RUNS_SUBDIR / "test-recipe-20261111T070000.000000Z"),
         )
         self.assertEqual(
             spec["effective"]["base"],
@@ -310,7 +310,7 @@ class PlanAndAssetTests(unittest.TestCase):
         self.assertIn("--nproc_per_node=2", spec["torchrun"])
         self.assertTrue(math.isclose(spec["lr_at_step"]["15000"], 1.375e-5))
         later = tl.plan(
-            "reference-15k",
+            "test-recipe",
             self.root,
             self.presets,
             now=now + dt.timedelta(microseconds=1),
@@ -319,16 +319,16 @@ class PlanAndAssetTests(unittest.TestCase):
 
     def test_existing_run_directory_is_never_reused(self):
         now = dt.datetime(2026, 11, 11, 7, 0, tzinfo=dt.timezone.utc)
-        spec = tl.plan("reference-15k", self.root, self.presets, now=now, selection=TWO)
+        spec = tl.plan("test-recipe", self.root, self.presets, now=now, selection=TWO)
         run, _ = tl.write_run_record(spec)
         with self.assertRaisesRegex(tl.TrainingConfigError, "reuse"):
-            tl.plan("reference-15k", self.root, self.presets, now=now)
+            tl.plan("test-recipe", self.root, self.presets, now=now)
         with self.assertRaises(FileExistsError):
             tl.write_run_record(spec)
         self.assertTrue((run / "run.json").is_file())
 
     def test_worker_recomputes_the_launcher_argv_and_refuses_drift(self):
-        spec = tl.plan("reference-15k", self.root, self.presets, selection=TWO)
+        spec = tl.plan("test-recipe", self.root, self.presets, selection=TWO)
         run, _ = tl.write_run_record(spec)
         loaded, preset, loaded_run, argv = load_spec(
             run / "run.json", self.root, self.presets
@@ -336,7 +336,7 @@ class PlanAndAssetTests(unittest.TestCase):
         self.assertEqual(argv, spec["native_argv"])
         self.assertEqual(loaded_run, run)
         edited = mutated(self.preset, native_flags__steps=20000)
-        (self.presets / "reference-15k.recipe.json").write_text(json.dumps(edited))
+        (self.presets / "test-recipe.recipe.json").write_text(json.dumps(edited))
         with self.assertRaisesRegex(tl.TrainingConfigError, "preset file changed"):
             load_spec(run / "run.json", self.root, self.presets)
 
@@ -518,15 +518,22 @@ class RecipeSelectionTests(unittest.TestCase):
         path.write_text(json.dumps(preset))
         return path
 
-    def test_gpu_profiles_keep_reference_settings_and_resolve_default_path(self):
+    def test_supplied_recipes_and_default_path(self):
         default = tl.load_preset()
-        reference = tl.load_preset("reference-15k")
-        for recipe, ranks, batch in ((default, 1, 8), (tl.load_preset("training-2gpu"), 2, 4)):
-            expected = copy.deepcopy(reference)
+        for recipe, ranks, batch in (
+            (default, 1, 8),
+            (tl.load_preset("training-2gpu"), 2, 4),
+            (tl.load_preset("training-warm-start"), 1, 8),
+        ):
+            expected = copy.deepcopy(default)
             expected.update(name=recipe["name"], summary=recipe["summary"])
             expected["native_flags"].update(
-                {"parallelism.dp_replicate": ranks, "batch_size": batch, "steps": 30000}
+                {"parallelism.dp_replicate": ranks, "batch_size": batch}
             )
+            if recipe["name"] == "training-warm-start":
+                expected["guards"]["init_adapter"] = (
+                    "outputs/training-runs/REPLACE_WITH_RUN/native/checkpoints/030000/pretrained_model"
+                )
             self.assertEqual(recipe, expected)
         self.assertEqual(
             tl.resolve_recipe("config/training/training.recipe.json"),
@@ -742,7 +749,7 @@ class TopologyTests(unittest.TestCase):
     def test_only_topology_flags_change_and_preset_bytes_are_untouched(self):
         before = {
             n: (tl.PRESET_DIR / f"{n}.recipe.json").read_bytes()
-            for n in ("reference-15k",)
+            for n in ("training", "training-2gpu", "training-warm-start")
         }
         nominal = tl.parse_argv(tl.build_native_argv(LOWLR, tl.ROOT, "/x/native"))
         for count in (1, 2):
@@ -769,7 +776,7 @@ class TopologyTests(unittest.TestCase):
             {n: (tl.PRESET_DIR / f"{n}.recipe.json").read_bytes() for n in before},
         )
         self.assertEqual(
-            tl.load_preset("reference-15k")["native_flags"]["policy.optimizer_lr"], 1e-4
+            tl.load_preset("training-2gpu")["native_flags"]["policy.optimizer_lr"], 1e-4
         )
 
     def test_selection_must_be_eligible_unique_and_well_formed(self):
@@ -831,7 +838,7 @@ class SelectedPlanReplayTests(unittest.TestCase):
         for selection, per_rank in ((GPU1, 8), (GPU0, 8), (TWO, 4)):
             with self.subTest(selection=selection):
                 spec = tl.plan(
-                    "reference-15k", self.root, self.presets, selection=selection
+                    "test-recipe", self.root, self.presets, selection=selection
                 )
                 self.assertIn(f"--nproc_per_node={len(selection)}", spec["torchrun"])
                 self.assertEqual(
@@ -853,7 +860,7 @@ class SelectedPlanReplayTests(unittest.TestCase):
                 self.assertEqual(argv, spec["native_argv"])
 
     def test_rank_replay_detects_tampered_selection_argv_or_world(self):
-        spec = tl.plan("reference-15k", self.root, self.presets, selection=GPU1)
+        spec = tl.plan("test-recipe", self.root, self.presets, selection=GPU1)
         run, _ = tl.write_run_record(spec)
         original = json.loads((run / "run.json").read_text())
 
@@ -975,7 +982,7 @@ class LaunchSeamTests(unittest.TestCase):
             self.assertEqual(
                 tl.main(
                     [
-                        "reference-15k",
+                        "test-recipe",
                         "--dataset-root",
                         "data/synthetic",
                         "--repo-id",
@@ -1048,7 +1055,7 @@ class GpuAdmissionTests(unittest.TestCase):
     def _plan(self, selection):
         self._seq += 1
         return tl.plan(
-            "reference-15k",
+            "test-recipe",
             self.root,
             self.presets,
             now=self.BASE_NOW + dt.timedelta(seconds=self._seq),
