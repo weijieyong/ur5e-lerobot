@@ -5,7 +5,7 @@ UR5e pick-and-place policies on LeRobot, currently with pi0.5.
 UR5e with a Robotiq 2F-85 or OnRobot RG2 gripper, RealSense D455 or D435i (front, external) and D405
 (wrist) cameras and a 3Dconnexion SpaceMouse. LeRobot 0.7.0, locked with Pixi: setup/calibration → SpaceMouse collection →
 fresh-base LoRA training with automatic train-only stats → supervised RTC rollout.
-Data, checkpoints and machine configuration stay local; Hub uploads are disabled.
+Full datasets, checkpoints and machine configuration stay local; Hub uploads are disabled.
 
 ## Prerequisites
 
@@ -58,9 +58,34 @@ Terms such as READY, floor, workspace and action chunk are defined in the [gloss
 2. Follow [training and deployment](docs/training.md) to train a finalized dataset with the reference schedule and copy complete assets for rollout.
 3. Return to the operating guide for supervised rollout and outcome recording.
 
-For an experimental, fixed-layout MuJoCo simulation of the UR5e + Robotiq 2F-85 task
-(scripted collection, training mechanics and learned rollout, with no sim-to-real qualification),
-see the [simulation guide](docs/simulation-scope.md).
+## Simulation
+
+The experimental MuJoCo environment uses the same LeRobot v3 recording and pi0.5 LoRA
+training pipeline. See the [simulation guide](docs/simulation-scope.md) for commands and limits.
+It uses a fixed layout and does not qualify a policy for real hardware.
+
+These recordings show the front camera on the left and wrist camera on the right.
+Click either animated preview to open its full-resolution MP4. Playback follows the saved
+dataset timestamps, not wall-clock inference timing.
+
+### Scripted teacher: data collection
+
+The first collection episode: the scripted teacher picks up the cube and places it in the
+tray while LeRobot records the demonstration. This is scripted control, not a learned policy.
+
+[![Scripted teacher picking up the red cube and placing it in the blue tray, with front and wrist views](docs/media/simulation/teacher.gif)](docs/media/simulation/teacher.mp4)
+
+### Learned policy: RTC rollout
+
+The first evaluation attempt after 1,000 action-expert LoRA updates on 10 fixed-layout teacher
+episodes. The trained policy runs without the teacher but fails to complete the task;
+the pilot scored **0/5 successful attempts**. This shows the rollout pipeline, not a successful policy.
+
+[![First learned-policy rollout, which fails to place the cube in the tray, with front and wrist views](docs/media/simulation/learned-rollout.gif)](docs/media/simulation/learned-rollout.mp4)
+
+The renderings use the bundled [MuJoCo Menagerie assets](src/lerobot_robot_ur5e/lerobot_robot_ur5e/sim/assets/PROVENANCE.md).
+
+## Verification
 
 Offline tests establish software behavior only.
 Clean installation, GPU training/save/strict reload and supervised physical
