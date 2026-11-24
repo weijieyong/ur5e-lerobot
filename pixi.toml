@@ -15,6 +15,7 @@ lerobot-hardware = "==0.7.0"
 lerobot-viz = "==0.7.0"
 pytorch-gpu = "*"
 hidapi = ">=0.14"
+mujoco-python = "==3.16.0"
 ruff = ">=0.17.4,<0.18"
 
 [pypi-dependencies]
@@ -92,4 +93,31 @@ cmd = """python -m scripts.rollout --robot.type=ur5e \
   --dataset.num_episodes={{ episodes }} \
   --dataset.push_to_hub=false --dataset.no_stamp=true \
   --return_to_initial_position=false --display_data=false {{ extra }}"""
+
+[tasks.sim-record]
+description = "CPU MuJoCo UR5e scripted-teacher collection via native lerobot-record (explicit sim root/repo_id; no hardware; local v3.0)"
+args = [{ arg = "dataset_root" }, { arg = "repo_id" }, { arg = "episodes", default = "2" }, { arg = "extra", default = "" }]
+env = { HF_HUB_OFFLINE = "1", HF_DATASETS_OFFLINE = "1", TRANSFORMERS_OFFLINE = "1" }
+cmd = """lerobot-record --robot.type=sim --robot.env.type=ur5e_sim \
+  --teleop.type=ur5e_sim_teacher \
+  --dataset.repo_id="{{ repo_id }}" --dataset.root="{{ dataset_root }}" \
+  --dataset.single_task="Pick up the red cube and place it on the blue tray" \
+  --dataset.fps=15 --dataset.episode_time_s=25 --dataset.reset_time_s=0 \
+  --dataset.num_episodes={{ episodes }} --dataset.push_to_hub=false \
+  --dataset.no_stamp=true --play_sounds=false --display_data=false {{ extra }}"""
+
+[tasks.sim-rollout]
+description = "Simulation learned-policy rollout via RTC-compatible native episodic engine (explicit sim paths/checkpoint; no hardware or teacher)"
+args = [{ arg = "policy_path" }, { arg = "dataset_root" }, { arg = "repo_id" }, { arg = "episodes", default = "5" }, { arg = "extra", default = "" }]
+env = { HF_HUB_OFFLINE = "1", HF_DATASETS_OFFLINE = "1", TRANSFORMERS_OFFLINE = "1" }
+cmd = """python -m scripts.sim_rollout --robot.type=sim --robot.env.type=ur5e_sim \
+  --policy.path="{{ policy_path }}" \
+  --strategy.type=episodic --strategy.smooth_handover=false --strategy.reset_to_initial_position=false \
+  --inference.type=rtc --inference.rtc.execution_horizon=10 --fps=15 \
+  --dataset.repo_id="{{ repo_id }}" --dataset.root="{{ dataset_root }}" \
+  --dataset.single_task="Pick up the red cube and place it on the blue tray" \
+  --dataset.fps=15 --dataset.episode_time_s=25 --dataset.reset_time_s=0 \
+  --dataset.num_episodes={{ episodes }} --dataset.push_to_hub=false \
+  --dataset.no_stamp=true --return_to_initial_position=false \
+  --play_sounds=false --display_data=false {{ extra }}"""
 
