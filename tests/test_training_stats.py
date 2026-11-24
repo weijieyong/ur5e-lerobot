@@ -11,7 +11,7 @@ from scripts import train_lora as tl
 from scripts.train_lora_entry import fit_training_datasets
 
 
-def recorder_features(use_video, height=16, width=16):
+def recorder_features(use_video, height=16, width=16, gripper_enabled=True):
     """Use actual robot properties + native recorder conversion, without robot construction/I/O."""
     from types import SimpleNamespace
 
@@ -20,11 +20,11 @@ def recorder_features(use_video, height=16, width=16):
 
     robot = object.__new__(UR5e)
     robot.config = SimpleNamespace(
-        gripper_enabled=True,
+        gripper_enabled=gripper_enabled,
         cameras={
             key: SimpleNamespace(height=height, width=width)
             for key in ("front", "wrist")
-        }
+        },
     )
     return {
         **hw_to_dataset_features(robot.action_features, "action", use_video=use_video),
@@ -156,6 +156,55 @@ class TrainingStatsTests(unittest.TestCase):
         self.assertGreater(dev.meta.stats["observation.state"]["max"][0], 1e6)
         for path, digest in original.items():
             self.assertEqual(tl.sha256(path), digest)
+
+    def test_six_joint_fit_without_gripper(self):
+        from copy import deepcopy
+        from types import SimpleNamespace
+
+        from datasets import Dataset
+        from lerobot.datasets.factory import make_train_eval_datasets
+
+        cfg = self.config()
+        train, dev = make_train_eval_datasets(cfg)
+        original = train.hf_dataset.select_columns(
+            ["observation.state", "action", "episode_index"]
+        ).with_format("numpy")[:]
+        rows = {
+            k: np.array(v[:, :6] if v.ndim == 2 else v, copy=True)
+            for k, v in original.items()
+        }
+        # Sixth arm joint exceeds [0, 1], catching accidental gripper range checks.
+        self.assertGreater(float(rows["observation.state"][:, -1].max()), 1.0)
+        self.assertGreater(float(rows["action"][:, -1].max()), 1.0)
+
+        six_features = recorder_features(
+            use_video=True, height=32, width=48, gripper_enabled=False
+        )
+        meta = SimpleNamespace(
+            total_tasks=train.meta.total_tasks,
+            features={
+                **deepcopy(train.meta.features),
+                "observation.state": six_features["observation.state"],
+                "action": six_features["action"],
+            },
+            stats=deepcopy(train.meta.stats),
+        )
+        six_train = SimpleNamespace(
+            hf_dataset=Dataset.from_dict(rows),
+            meta=meta,
+            episodes=list(train.episodes),
+        )
+
+        fitted_train, _ = fit_training_datasets(cfg, lambda _: (six_train, dev))
+        stats = fitted_train.meta.stats
+        for key in ("observation.state", "action"):
+            for name, value in stats[key].items():
+                if name != "count":
+                    self.assertEqual(np.asarray(value).shape, (6,))
+        # Complete 50-step windows yield relative offsets 2..51 across all six joints.
+        np.testing.assert_allclose(stats["action"]["min"], [2.0] * 6, atol=1e-7)
+        np.testing.assert_allclose(stats["action"]["max"], [51.0] * 6, atol=1e-7)
+        np.testing.assert_allclose(stats["action"]["mean"], [26.5] * 6, atol=1e-7)
 
     def test_config_drives_chunk_and_mask_and_rejects_invalid_arrays(self):
         from datasets import Dataset

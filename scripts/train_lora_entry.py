@@ -119,21 +119,25 @@ def fit_training_datasets(cfg, make_datasets=None):
     train, dev = (make_datasets or make_train_eval_datasets)(cfg)
     check_normalization(cfg.policy)
     require(train.meta.total_tasks == 1, "only single-task recordings are supported")
-    names = [f"joint_{i}.pos" for i in range(6)] + ["gripper.pos"]
+    arm = [f"joint_{i}.pos" for i in range(6)]
+    # Two supported layouts: six arm joints, optionally followed by the gripper.
+    has_gripper = train.meta.features["action"].get("names") != arm
+    names = arm + ["gripper.pos"] if has_gripper else arm
+    dim = len(names)
     for key in ("observation.state", "action"):
         feature = train.meta.features[key]
         require(
             feature.get("names") == names
-            and tuple(feature["shape"]) == (7,)
+            and tuple(feature["shape"]) == (dim,)
             and feature["dtype"] == "float32",
-            f"invalid {key}: expected matching six joints + gripper.pos",
+            f"invalid {key}: expected matching six joints, optionally + gripper.pos",
         )
     policy = cfg.policy
     mask = RelativeActionsProcessorStep(
         enabled=True, exclude_joints=policy.relative_exclude_joints, action_names=names
-    )._build_mask(7)
+    )._build_mask(dim)
     require(
-        policy.use_relative_actions and mask == [True] * 6 + [False],
+        policy.use_relative_actions and mask == [True] * 6 + [False] * has_gripper,
         "relative actions must subtract six arm joints and keep gripper absolute",
     )
     # Selecting columns avoids image/video decoding and respects the native episode filter.
@@ -146,11 +150,11 @@ def fit_training_datasets(cfg, make_datasets=None):
     }
     for key, values in arrays.items():
         require(
-            values.ndim == 2 and values.shape[1] == 7 and np.isfinite(values).all(),
+            values.ndim == 2 and values.shape[1] == dim and np.isfinite(values).all(),
             f"invalid/nonfinite training {key}",
         )
         require(
-            np.all((values[:, -1] >= 0) & (values[:, -1] <= 1)),
+            not has_gripper or np.all((values[:, -1] >= 0) & (values[:, -1] <= 1)),
             "gripper values must be in [0,1]",
         )
     arrays["episode_index"] = np.asarray(rows["episode_index"])

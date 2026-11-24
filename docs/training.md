@@ -129,16 +129,16 @@ The supported route is local, single-task training from the original base, optio
 warm-starting its LoRA weights. Streaming and optimizer-state resume are not supported.
 Native splitting holds out the last ceil(episodes × 0.2) episodes **per task**,
 not a random frame sample. Both training and development episodes must exist.
-Use matching six-joint radians plus normalized `gripper.pos` state/action order,
-recorder camera identities and the collection/control rate of 15 Hz. `train-check` and
-training startup reject a missing or non-15 `fps` in the dataset's `meta/info.json`.
-This checks declared rate, not measured capture timing.
+Use six-joint radians, optionally followed by normalized `gripper.pos`, in matching
+state/action order, with recorder camera identities and the collection/control rate
+of 15 Hz. `train-check` and training startup reject a missing or non-15 `fps` in the
+dataset's `meta/info.json`. This checks declared rate, not measured capture timing.
 
 Each rank fits independently from actual `train.hf_dataset` numeric columns.
 State quantiles use all training states; action quantiles use native complete
 within-episode windows of the policy's configured chunk size. Future six-arm
-commands subtract the window's initial measured state; gripper stays absolute.
-Padded tail windows are excluded from fitting. Missing/nonfinite arrays, wrong
+commands subtract the window's initial measured state; gripper stays absolute
+when present. Padded tail windows are excluded from fitting. Missing/nonfinite arrays, wrong
 joint order, wrong gripper masking or no usable chunks fail clearly. Native camera/
 ImageNet statistics are preserved. No image/video decoding is needed for fitting.
 Native stat-key renaming and processor construction then use these fitted values.
