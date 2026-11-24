@@ -227,7 +227,7 @@ def load_init_adapter(policy, adapter_dir, guards):
 
 
 def prepare_optimizer_and_scheduler(
-    cfg, policy, guards, receipt, make_optimizer, root=ROOT
+    cfg, policy, guards, receipt, make_optimizer, root=ROOT, expert_only=True
 ):
     """Optionally warm-start LoRA weights, verify trainability, and build fresh optimizer/scheduler."""
     import torch
@@ -235,7 +235,7 @@ def prepare_optimizer_and_scheduler(
     if "init_adapter" in guards:  # previous run's LoRA weights, same LoRA config
         load_init_adapter(policy, Path(root) / guards["init_adapter"], guards)
     trainable = {n: p for n, p in policy.named_parameters() if p.requires_grad}
-    check_trainable(trainable, guards)
+    check_trainable(trainable, guards, expert_only)
     require(
         all(torch.isfinite(p).all().item() for p in trainable.values()),
         "nonfinite initial adapter",
@@ -386,7 +386,13 @@ def main(argv=None):
 
         def checked_optimizer(cfg, policy):
             optimizer, scheduler = prepare_optimizer_and_scheduler(
-                cfg, policy, guards, receipt, original_optimizer, root=ROOT
+                cfg,
+                policy,
+                guards,
+                receipt,
+                original_optimizer,
+                root=ROOT,
+                expert_only=flags["policy.train_expert_only"],
             )
             write_json(run / f"rank-{rank}.model.json", receipt)
             return optimizer, scheduler

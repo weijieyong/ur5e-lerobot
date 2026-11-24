@@ -180,8 +180,12 @@ class RecipeGuardTests(unittest.TestCase):
             ({"native_flags__policy_DOT_push_to_hub": True}, "push_to_hub"),
             ({"native_flags__save_checkpoint_to_hub": True}, "save_checkpoint_to_hub"),
             (
-                {"native_flags__policy_DOT_train_expert_only": False},
+                {"native_flags__policy_DOT_train_expert_only": "false"},
                 "train_expert_only",
+            ),
+            (
+                {"native_flags__policy_DOT_train_expert_only": False},
+                "target_modules",
             ),
             (
                 {"native_flags__policy_DOT_relative_exclude_joints": []},
@@ -418,6 +422,37 @@ class PlanAndAssetTests(unittest.TestCase):
             )
         with self.assertRaises(tl.TrainingConfigError):
             tl.check_trainable(names[:79], self.preset["guards"])
+
+    def test_vlm_recipe_requires_lora_in_vlm_and_expert(self):
+        recipe = tl.check_recipe(tl.load_preset("training-vlm-expert"))
+        guards = recipe["guards"]
+        vlm = [f"m.paligemma.layers.{i}.lora_A.weight" for i in range(180)]
+        expert = [f"m.gemma_expert.layers.{i}.lora_A.weight" for i in range(80)]
+        tl.check_trainable(vlm + expert, guards, expert_only=False)
+        for bad in (
+            [n.replace("paligemma", "other") for n in vlm] + expert,
+            vlm + [n.replace("gemma_expert", "other") for n in expert],
+            ["m.paligemma.dense.weight"] + vlm[1:] + expert,
+            vlm + expert[1:],
+        ):
+            with self.assertRaises(tl.TrainingConfigError):
+                tl.check_trainable(bad, guards, expert_only=False)
+        with self.assertRaisesRegex(tl.TrainingConfigError, "frozen VLM"):
+            tl.check_trainable(vlm + expert, guards)
+
+    def test_vlm_targets_reach_native_config(self):
+        preset = mutated(
+            self.preset,
+            native_flags__policy_DOT_train_expert_only=False,
+            native_flags__peft_DOT_target_modules=r".*\.paligemma\..*\.q_proj",
+        )
+        argv = tl.build_native_argv(preset, self.root, self.root / "out-vlm")
+        flags = tl.parse_argv(argv)
+        effective = tl.effective_settings(tl.validate_native(argv), flags)
+        self.assertFalse(effective["train_expert_only"])
+        self.assertEqual(
+            effective["lora_target_modules"], r".*\.paligemma\..*\.q_proj"
+        )
 
 
 class CheckpointTests(unittest.TestCase):

@@ -30,7 +30,6 @@ REQUIRED_FLAGS = {
     "policy.type": "pi05",
     "policy.device": "cuda",
     "policy.dtype": "bfloat16",
-    "policy.train_expert_only": True,
     "policy.use_relative_actions": True,
     "policy.relative_exclude_joints": ["gripper"],
     "policy.compile_model": False,
@@ -157,6 +156,14 @@ def check_recipe(preset):
             key in flags and flags[key] == value and type(flags[key]) is type(value),
             f"{key} must be {value!r} on the supported route, got {flags.get(key)!r}",
         )
+    expert_only = flags.get("policy.train_expert_only")
+    require(type(expert_only) is bool, "policy.train_expert_only must be a boolean")
+    targets = flags.get("peft.target_modules")
+    require(
+        expert_only or (isinstance(targets, str) and targets),
+        "peft.target_modules must select VLM layers when train_expert_only is false "
+        "(native default targets are expert-only)",
+    )
     for key in PATH_FLAGS:
         if key != "dataset.root" or key in flags:
             relative_path(flags.get(key))
@@ -535,13 +542,22 @@ def check_assets(preset, root, hash_base=False):
     return summary
 
 
-def check_trainable(names, guards):
+def check_trainable(names, guards, expert_only=True):
+    """Exactly the expected LoRA tensors; VLM adapters only when the recipe opts in."""
     names = list(names)
     require(
         len(names) == guards["trainable_lora_tensors"]
-        and all("lora_" in n and ".paligemma." not in n for n in names),
-        f"expected exactly {guards['trainable_lora_tensors']} expert-side LoRA tensors and a frozen VLM",
+        and all("lora_" in n for n in names),
+        f"expected exactly {guards['trainable_lora_tensors']} LoRA-only tensors, got {len(names)}",
     )
+    vlm = any(".paligemma." in n for n in names)
+    if expert_only:
+        require(not vlm, "expected expert-side LoRA tensors and a frozen VLM")
+    else:
+        require(
+            vlm and any(".gemma_expert." in n for n in names),
+            "expected LoRA tensors in both the VLM and the action expert",
+        )
 
 
 def expected_save_steps(steps, save_freq):
@@ -663,6 +679,8 @@ def effective_settings(cfg, flags):
         "lora_alpha": cfg.peft.lora_alpha,
         "peft_method": str(cfg.peft.method_type),
         "train_expert_only": cfg.policy.train_expert_only,
+        "freeze_vision_encoder": cfg.policy.freeze_vision_encoder,
+        "lora_target_modules": cfg.peft.target_modules,
         "use_relative_actions": cfg.policy.use_relative_actions,
         "relative_exclude_joints": list(cfg.policy.relative_exclude_joints),
         "chunk_size": cfg.policy.chunk_size,
@@ -693,6 +711,9 @@ def effective_settings(cfg, flags):
         "resume": False,
         "lora_r": flags["peft.r"],
         "lora_alpha": flags["peft.lora_alpha"],
+        "train_expert_only": flags["policy.train_expert_only"],
+        "freeze_vision_encoder": flags.get("policy.freeze_vision_encoder", False),
+        "lora_target_modules": flags.get("peft.target_modules"),
         "dataset_root": flags["dataset.root"],
         "base": flags["policy.pretrained_path"],
         "output_dir": flags["output_dir"],
