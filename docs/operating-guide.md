@@ -46,9 +46,10 @@ and complete the configuration step in [First-time bring-up order](#first-time-b
   config defaults to `HF_HUB_OFFLINE=1`; an empty cache cannot load a model.
 - **Interactive robot commands:** an X11 desktop session for previews and keyboard
   input, reachable UR5e controller in Remote Control with the intended TCP/tool
-  and safety settings, and the URCap for the configured `GRIPPER_TYPE`: `robotiq`
+  and safety settings. Use the URCap for the configured gripper, `robotiq`
   (Robotiq URCap socket, port 63352) or `onrobot_rg2` (OnRobot URCap XML-RPC, port
   41414; the RG2 is powered by the tool flange, so the arm must be powered on).
+  Set `GRIPPER_TYPE=none` for six-joint collection.
   The RG2 has no speed input (a full stroke takes about a second); its URCap ignores a
   new grip while the fingers move, so the plugin stops a moving gripper before reversing.
   `GRIPPER_FORCE` (0–255, RG2 0–40 N; empty means 128, about 20 N) applies to teleop,
@@ -195,8 +196,8 @@ pixi run hw-check --only cameras --preview --camera-seconds 10
 pixi run hw-check --only spacemouse --spacemouse-seconds 20
 ```
 
-`hw-check` queries arm/gripper, cameras and input; it does not upload an arm script,
-activate or command the gripper. Failures return nonzero.
+`hw-check` queries the arm, any enabled gripper, cameras and input. It does not
+upload an arm script, activate or command the gripper. Failures return nonzero.
 The SpaceMouse-only check never connects to the robot. Camera preview closes with
 q/Esc; inspect front/wrist identity, view, orientation, lighting and fixed controls.
 
@@ -215,7 +216,7 @@ Stop software motion sessions before capturing references with the pendant:
 - Position the arm at the intended episode home, then `pixi run set-home` saves
   six measured joint angles **in degrees, base to wrist 3**. Preserve the chosen
   home unless deliberately replacing it; verify its approach path before using h.
-  In teleop, record and rollout, h first opens the gripper where the arm is
+  With a gripper enabled, h first opens it where the arm is
   (releasing anything held), waits up to 3 s for it to open, then moves home; if it
   does not open the arm stays put and the command stops with an error.
 - Confirm the active TCP, place fingertips just above the table in the intended
@@ -235,7 +236,7 @@ motion. Restart teleop/record/rollout after reference changes.
 pixi run teleop
 ```
 
-Connecting uploads the arm control script and may activate the gripper. Start
+Connecting uploads the arm control script and may activate an enabled gripper. Start
 with low speeds, for example 0.03 m/s and 0.15 rad/s in
 `SPACEMOUSE_LINEAR_SPEED_M_S` / `SPACEMOUSE_ANGULAR_SPEED_RAD_S`. These maxima
 apply at full puck deflection to teleop and recording. Preserve deliberate local
@@ -316,6 +317,14 @@ Stop teleop, put the robot at home and reset the scene. For a new dataset:
 pixi run record 3
 ```
 
+For six-joint collection, set `GRIPPER_TYPE=none` and a fresh `DATASET_REPO_ID`
+in `config/local/machine.env`. Restart `pixi run teleop` or `pixi run record` to
+apply the setting. These sessions skip all gripper communication, ignore the
+SpaceMouse gripper buttons, and move only the arm when you press h. The dataset
+stores six measured joint angles in `observation.state` and six absolute joint
+targets in `action`, all in radians. Configured cameras still record. The
+existing pi0.5 training recipe expects seven values including `gripper.pos`.
+
 | Phase/input | Result |
 |---|---|
 | READY | Live preview and teleop; no frames saved. Reset/home, then keyboard Right arrow/n starts. |
@@ -345,12 +354,15 @@ pixi run info
 pixi run view 0
 ```
 
-Inspect both videos, task completion, gripper response and state/action curves.
-Expect 15 fps metadata, seven state/action values and front/wrist images. LeRobot
+Inspect both videos, task completion, state/action curves and gripper response
+if enabled. Expect 15 fps metadata, seven state/action values with the gripper
+enabled or six with `GRIPPER_TYPE=none`, and front/wrist images. LeRobot
 v3 shares MP4 files across episodes; metadata preserves reader boundaries.
-State is measured joint radians plus gripper opening (0 open, 1 closed; Robotiq POS/255,
-RG2 1 − width/open width, about 0.9 on an empty close, lower when holding an object); action is six absolute joint
-targets plus binary gripper intent. Actions follow that row's observation, and
+State contains measured joint angles in radians, and action contains six absolute
+joint targets. With the gripper enabled, state also contains gripper opening
+(0 open, 1 closed) and action also contains the binary gripper command. Robotiq
+reports POS/255, and RG2 reports 1 − width/open width (about 0.9 on an empty close,
+lower when holding an object). Actions follow that row's observation, and
 measured motion may lag. The plugin records clipped targets actually dispatched,
 relying on the pinned default processors preserving the action dictionary; rerun
 the recording regression if processors/LeRobot change.
@@ -370,6 +382,7 @@ Deploy using [training and deployment](training.md) first. Before motion, compar
 training dataset's `meta/info.json` `fps` with `CONTROL_FPS` (used for control and saved rollout FPS):
 all must be 15 for this recipe. Keep `--interpolation_multiplier=1`. Training checks dataset
 FPS; rollout does not infer or enforce the checkpoint's collection rate.
+With `GRIPPER_TYPE=none`, use a checkpoint trained with six-joint state and action vectors.
 
 Stop teleop/recording and use a focused POSIX terminal with usable stdin/termios.
 Place the robot at the demonstrated home joint configuration with a clear
@@ -436,9 +449,9 @@ then issue a fresh START. Invalid measurements and read/motion failures terminat
 with an error. The tolerance is an adjustable application guard, not a safety-rated
 threshold; it and the defaults require operator lab validation.
 
-Only h in READY queues the existing slow `go_home` motion (gripper opens first),
-executed by the main control thread. Home returns to READY and never auto-starts; successful motion
-alone does not establish the next START check. The wrapper prints and forces both
+Only h in READY queues the slow `go_home` motion on the main control thread.
+An enabled gripper opens before the arm moves. Home returns to READY and never
+auto-starts. Successful motion alone does not establish the next START check. The wrapper prints and forces both
 native automatic reset-to-initial and exit-return settings false. Starting, saving,
 discarding and exiting never automatically home. After the final trial the process
 exits at its final pose. To home afterward, start teleop and press h with a clear

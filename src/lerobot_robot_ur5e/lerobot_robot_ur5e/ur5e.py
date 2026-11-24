@@ -5,6 +5,7 @@ OnRobot RG2 (OnRobot URCap XML-RPC); both are reached through the UR controller'
 
 Observation: joint_0..5.pos (rad, measured), gripper.pos (0 = open, 1 = closed, measured), camera images.
 Action:      joint_0..5.pos (rad, absolute targets), gripper.pos (command: < 0.5 open, >= 0.5 closed).
+With GRIPPER_TYPE=none, both vectors omit gripper.pos.
 """
 
 import json
@@ -32,6 +33,13 @@ HOME_OPEN_TIMEOUT_S = 3.0
 # Connected robots by IP, so the SpaceMouse teleoperator in the same process can use the
 # robot's UR connection for IK and homing (only one control connection to the UR is possible).
 CONNECTED: dict[str, "UR5e"] = {}
+
+
+def joint_features(gripper_enabled: bool) -> dict[str, type]:
+    features = dict.fromkeys(JOINTS, float)
+    if gripper_enabled:
+        features[GRIPPER] = float
+    return features
 
 
 # Every gripper client provides: activate() (make ready; may move the fingers), check() (read-only
@@ -176,8 +184,10 @@ class OnRobotRG2:
         pass  # each XML-RPC call opens its own HTTP connection
 
 
-def make_gripper(config: UR5eConfig) -> RobotiqSocket | OnRobotRG2:
+def make_gripper(config: UR5eConfig) -> RobotiqSocket | OnRobotRG2 | None:
     """Connect to the configured gripper without moving it (activate() may move it)."""
+    if not config.gripper_enabled:
+        return None
     if config.gripper_type == "onrobot_rg2":
         return OnRobotRG2(
             require_ip(config.ip),
@@ -213,7 +223,7 @@ class UR5e(Robot):
     # --- features -------------------------------------------------------------------------
     @property
     def _state_ft(self) -> dict[str, type]:
-        return {**{j: float for j in JOINTS}, GRIPPER: float}
+        return joint_features(self.config.gripper_enabled)
 
     @property
     def observation_features(self) -> dict:
@@ -252,7 +262,8 @@ class UR5e(Robot):
             # Uploads the ur_rtde control script; the pendant must be in Remote Control mode.
             self.rtde_c = rtde_control.RTDEControlInterface(ip)
             self.gripper = make_gripper(self.config)
-            self.gripper.activate()
+            if self.gripper is not None:
+                self.gripper.activate()
             for cam in self.cameras.values():
                 cam.connect()
         except BaseException:
@@ -309,7 +320,8 @@ class UR5e(Robot):
         q = self.measured_joints()
         state_read_end = time.perf_counter()
         obs = {j: float(v) for j, v in zip(JOINTS, q)}
-        obs[GRIPPER] = self.gripper.position()
+        if self.config.gripper_enabled:
+            obs[GRIPPER] = self.gripper.position()
         camera_ready = {}
         for key, cam in self.cameras.items():
             obs[key] = cam.read_latest(max_age_ms=self.config.camera_max_age_ms)
@@ -344,8 +356,13 @@ class UR5e(Robot):
     def send_action(self, action: dict) -> dict:
         start = time.perf_counter()
         q_req = np.array([action[j] for j in JOINTS], dtype=float)
-        if not np.isfinite(q_req).all() or not math.isfinite(float(action[GRIPPER])):
-            raise ValueError("Joint targets and gripper command must be finite")
+        if not np.isfinite(q_req).all():
+            raise ValueError("Joint targets must be finite")
+        closed = None
+        if self.config.gripper_enabled:
+            if not math.isfinite(float(action[GRIPPER])):
+                raise ValueError("Gripper command must be finite")
+            closed = action[GRIPPER] >= 0.5
         self.check_safety()
         q_meas = self.measured_joints()
         if q_meas.shape != (6,) or not np.isfinite(q_meas).all():
@@ -362,17 +379,17 @@ class UR5e(Robot):
             )
         self._servo_active = True
 
-        closed = action[GRIPPER] >= 0.5
-        if closed != self._gripper_closed:
-            self.gripper.grip(closed)
-            self._gripper_closed = closed
-
         # LeRobot 0.7.0's record_loop still ignores send_action's return value and saves
         # action_values. Its default identity processors share this dict with action_values;
-        # update it in place to record the clipped target and binary gripper command.
-        action.update(
-            {**{j: float(v) for j, v in zip(JOINTS, q_cmd)}, GRIPPER: float(closed)}
-        )
+        # update it in place to record the clipped targets and any binary gripper command.
+        if closed is not None:
+            if closed != self._gripper_closed:
+                self.gripper.grip(closed)
+                self._gripper_closed = closed
+            action[GRIPPER] = float(closed)
+        else:
+            action.pop(GRIPPER, None)
+        action.update({j: float(v) for j, v in zip(JOINTS, q_cmd)})
         self._write_timing(
             {
                 "event": "sample",
@@ -403,7 +420,7 @@ class UR5e(Robot):
         )
 
     def go_home(self) -> None:
-        """Open the gripper where the arm is, then a blocking, slow joint move to the configured home pose."""
+        """Open the gripper if enabled, then move slowly to the configured home pose."""
         if len(self.config.home_joints_deg) != 6:
             log.warning(
                 "No home pose configured (UR5E_HOME_JOINTS_DEG); ignoring home request"
@@ -413,16 +430,17 @@ class UR5e(Robot):
         start = time.perf_counter()
         self.rtde_c.servoStop()
         self._servo_active = False
-        # Release any held object before moving so every trial starts at home with the gripper open.
-        self.gripper.grip(False)
-        self._gripper_closed = False
-        deadline = time.monotonic() + HOME_OPEN_TIMEOUT_S
-        while self.gripper.position() > HOME_OPEN_POSITION:
-            if time.monotonic() > deadline:
-                raise RuntimeError(
-                    "Gripper did not open before homing; check it on the pendant"
-                )
-            time.sleep(0.02)
+        if self.config.gripper_enabled:
+            # Release any held object before moving so every trial starts at home with the gripper open.
+            self.gripper.grip(False)
+            self._gripper_closed = False
+            deadline = time.monotonic() + HOME_OPEN_TIMEOUT_S
+            while self.gripper.position() > HOME_OPEN_POSITION:
+                if time.monotonic() > deadline:
+                    raise RuntimeError(
+                        "Gripper did not open before homing; check it on the pendant"
+                    )
+                time.sleep(0.02)
         home = [math.radians(d) for d in self.config.home_joints_deg]
         if self.rtde_c.moveJ(home, self.config.home_speed_rad_s, 0.5) is False:
             raise RuntimeError("UR5e rejected home move; check the pendant")

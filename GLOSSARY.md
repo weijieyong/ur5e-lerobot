@@ -63,11 +63,11 @@ The recorded unit of either a demonstration or a rollout.
 _Avoid_: trial, run
 
 **Robot state**:
-The measured arm joint angles plus the measured gripper opening at one instant.
+The measured arm joint angles at one instant, plus the measured gripper opening if enabled.
 _Avoid_: proprio, qpos, joint state
 
 **Action**:
-What the robot is told to do for one control step: an absolute target angle for each of the six arm joints plus a gripper command.
+What the robot is told to do for one control step: an absolute target angle for each of the six arm joints, plus a gripper command if enabled.
 _Avoid_: delta, twist, command
 
 **Gripper command**:

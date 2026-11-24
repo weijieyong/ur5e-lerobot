@@ -69,6 +69,9 @@ def check_gripper() -> None:
     g = make_gripper(
         UR5eConfig(cameras={})
     )  # never activate(): that may move the fingers
+    if g is None:
+        print("[gripper] disabled (GRIPPER_TYPE=none)")
+        return
     try:
         summary = g.check()
         t0 = time.perf_counter()

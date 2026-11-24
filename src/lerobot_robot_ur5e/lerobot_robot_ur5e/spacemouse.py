@@ -12,8 +12,8 @@ import time
 import numpy as np
 from lerobot.teleoperators import Teleoperator
 
-from .config_ur5e import SpaceMouseConfig
-from .ur5e import CONNECTED, GRIPPER, JOINTS
+from .config_ur5e import SpaceMouseConfig, default_gripper_type
+from .ur5e import CONNECTED, GRIPPER, JOINTS, joint_features
 
 log = logging.getLogger(__name__)
 
@@ -206,7 +206,11 @@ class SpaceMouse(Teleoperator):
 
     @property
     def action_features(self) -> dict:
-        return {**{j: float for j in JOINTS}, GRIPPER: float}
+        robot = CONNECTED.get(self.config.robot_ip)
+        features = getattr(robot, "action_features", None)
+        if features is not None:
+            return features
+        return joint_features(default_gripper_type() != "none")
 
     @property
     def feedback_features(self) -> dict:
@@ -331,13 +335,13 @@ class SpaceMouse(Teleoperator):
                 f"No connected UR5e at {self.config.robot_ip} in this process"
             )
         c = self.config
+        gripper_enabled = GRIPPER in self.action_features
 
         if self._home_requested.is_set():
             self._home_requested.clear()
             robot.go_home()
-            self._gripper_cmd = (
-                0.0  # go_home opened the gripper; don't re-close a latched command
-            )
+            if gripper_enabled:
+                self._gripper_cmd = 0.0  # go_home opened the gripper
             self._target_pose = None
             self._last_t = None
             axes, buttons = self.hid.get_state()
@@ -356,13 +360,14 @@ class SpaceMouse(Teleoperator):
         dt = 0.0 if self._last_t is None else min(now - self._last_t, 0.2)
         self._last_t = now
 
-        # Gripper: buttons latch a command; start from the measured state.
-        if self._gripper_cmd is None:
-            self._gripper_cmd = float(robot.gripper.position() > 0.5)
-        if buttons & (1 << c.close_button):
-            self._gripper_cmd = 1.0
-        elif buttons & (1 << c.open_button):
-            self._gripper_cmd = 0.0
+        if gripper_enabled:
+            # Buttons latch a gripper command, initialized from the measured opening.
+            if self._gripper_cmd is None:
+                self._gripper_cmd = float(robot.gripper.position() > 0.5)
+            if buttons & (1 << c.close_button):
+                self._gripper_cmd = 1.0
+            elif buttons & (1 << c.open_button):
+                self._gripper_cmd = 0.0
 
         v, w = self.map_axes(axes)
         if self._target_pose is None or (not v.any() and not w.any()):
@@ -406,7 +411,7 @@ class SpaceMouse(Teleoperator):
             else:
                 log.warning("IK rejected (no solution or jump too large); holding")
 
-        return {
-            **{j: float(v) for j, v in zip(JOINTS, self._q_target)},
-            GRIPPER: self._gripper_cmd,
-        }
+        action = {j: float(v) for j, v in zip(JOINTS, self._q_target)}
+        if gripper_enabled:
+            action[GRIPPER] = self._gripper_cmd
+        return action

@@ -20,6 +20,7 @@ def recorder_features(use_video, height=16, width=16):
 
     robot = object.__new__(UR5e)
     robot.config = SimpleNamespace(
+        gripper_enabled=True,
         cameras={
             key: SimpleNamespace(height=height, width=width)
             for key in ("front", "wrist")

@@ -52,6 +52,10 @@ def _env_gripper_force() -> int | None:
 DEFAULT_GRIPPER_FORCE = {"robotiq": 64, "onrobot_rg2": 128}
 
 
+def default_gripper_type() -> str:
+    return _env("GRIPPER_TYPE") or "robotiq"
+
+
 def _default_cameras() -> dict[str, CameraConfig]:
     w, h, fps = (
         int(_env("CAMERA_WIDTH", "640")),
@@ -105,8 +109,8 @@ class UR5eConfig(RobotConfig):
     max_joint_step_rad: float = 0.05
 
     # Gripper, reached through the controller: "robotiq" (2F-85, Robotiq URCap socket)
-    # or "onrobot_rg2" (RG2 on the tool flange, OnRobot URCap XML-RPC).
-    gripper_type: str = field(default_factory=lambda: _env("GRIPPER_TYPE") or "robotiq")
+    # or "onrobot_rg2" (RG2 on the tool flange, OnRobot URCap XML-RPC). "none" uses only the arm joints.
+    gripper_type: str = field(default_factory=default_gripper_type)
     gripper_port: int | None = None  # None: 63352 (Robotiq) or 41414 (OnRobot)
     gripper_speed: int = 128  # 0-255; Robotiq only (the RG2 has no speed input)
     # 0-255, shared by teleop, recording and rollout; the RG2 scales it linearly to 0-40 N.
@@ -116,6 +120,10 @@ class UR5eConfig(RobotConfig):
     gripper_close_width_mm: float = field(
         default_factory=lambda: float(_env("GRIPPER_CLOSE_WIDTH_MM", "8"))
     )
+
+    @property
+    def gripper_enabled(self) -> bool:
+        return self.gripper_type != "none"
 
     def __post_init__(self):
         super().__post_init__()
@@ -135,8 +143,10 @@ class UR5eConfig(RobotConfig):
             raise ValueError(
                 "Home pose must contain six finite joint angles in degrees"
             )
+        if not self.gripper_enabled:
+            return
         if self.gripper_type not in DEFAULT_GRIPPER_FORCE:
-            raise ValueError("GRIPPER_TYPE must be robotiq or onrobot_rg2")
+            raise ValueError("GRIPPER_TYPE must be robotiq, onrobot_rg2 or none")
         if self.gripper_force is None:
             self.gripper_force = DEFAULT_GRIPPER_FORCE[self.gripper_type]
         if not all(

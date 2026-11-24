@@ -601,6 +601,7 @@ class RolloutTests(unittest.TestCase):
             )
             mouse.hid = SimpleNamespace(get_state=lambda: (np.zeros(6), 0))
             robot = SimpleNamespace(
+                action_features=dict.fromkeys(JOINTS + [GRIPPER], float),
                 measured_joints=lambda: np.zeros(6),
                 rtde_r=SimpleNamespace(getActualTCPPose=lambda: [0.0] * 6),
                 gripper=SimpleNamespace(position=lambda: 80 / 255),
@@ -623,6 +624,7 @@ class RolloutTests(unittest.TestCase):
             mouse._home_requested.set()
             q = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
             robot = SimpleNamespace(
+                action_features=dict.fromkeys(JOINTS + [GRIPPER], float),
                 measured_joints=lambda: q,
                 rtde_r=SimpleNamespace(getActualTCPPose=lambda: [0.0] * 6),
                 gripper=SimpleNamespace(position=lambda: 1.0),
