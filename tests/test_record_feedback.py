@@ -59,7 +59,6 @@ class RecordingFeedbackTests(unittest.TestCase):
 
     @contextlib.contextmanager
     def recorder(self, loop, episodes=2):
-        # External writer/hardware stand-ins; exercise LeRobot's actual episode state machine.
         dataset = SimpleNamespace(num_episodes=5, finalize=lambda: None)
         dataset.save_episode = lambda: setattr(
             dataset, "num_episodes", dataset.num_episodes + 1
@@ -190,8 +189,6 @@ class RecordingFeedbackTests(unittest.TestCase):
                 pose[3] = math.radians(45)
                 mouse.reset_reference()
             if len(phases) == 4:
-                # The native record-loop decorator stops this writer on the tilt error.
-                # Retrying must still be able to persist camera frames without hanging.
                 self.assertTrue(
                     any(t.is_alive() for t in dataset.writer.image_writer.threads)
                 )
@@ -302,7 +299,6 @@ class RecordingFeedbackTests(unittest.TestCase):
 
             def save():
                 dataset.num_episodes += 1
-                # Keyboard input while the external writer is busy must not carry into READY.
                 events["exit_early"] = True
                 events["rerecord_episode"] = True
 
@@ -370,7 +366,6 @@ class RecordingFeedbackTests(unittest.TestCase):
                     },
                     action={"joint_0.pos": 0.2},
                 )
-                # LeRobot still sends (and later grows) its own grid, under the phase/controls strip.
                 status, grid = send_blueprint.call_args.args[0].root_container.contents
                 self.assertEqual(
                     [view.name for view in status.contents], ["Phase", "Controls"]

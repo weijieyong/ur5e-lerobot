@@ -14,6 +14,7 @@ Every command is a Pixi task in `pixi.toml`. Each description states whether the
 ## Where things live
 
 - `README.md`: entry point; `docs/operating-guide.md` owns setup/live operations and `docs/training.md` owns automatic normalization, training and deployment.
+- `docs/adr/`: architecture decision records. Code carries no comments; record a non-obvious decision here and file an issue for a workaround. `pixi run lint` enforces a ratchet (`config/comment-baseline.json`); `/delete-comment` repeats the audit.
 - `GLOSSARY.md`: task, safety, data and machine terms; use these names in code and docs.
 - `src/lerobot_robot_ur5e/`: the LeRobot plugin (UR5e robot, SpaceMouse teleop, cameras).
 - `scripts/`: entry points, run as `python -m scripts.<name>`. `teleop`, `rollout` and the tests import shared recording feedback from `scripts.record`.

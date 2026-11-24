@@ -25,7 +25,6 @@ PRESET_DIR = ROOT / "config" / "training"
 RUNS_SUBDIR = Path("outputs") / "training-runs"
 PATH_FLAGS = ("dataset.root", "policy.pretrained_path")
 
-# Invariants of the supported route, independent of the named recipe.
 REQUIRED_FLAGS = {
     "policy.type": "pi05",
     "policy.device": "cuda",
@@ -52,7 +51,6 @@ SCHEDULE_FLAGS = (
     "policy.scheduler_decay_steps",
     "steps",
 )
-# Mechanics-only GPU gate: native eval + save twice on both ranks. Not a learning result.
 SMOKE_OVERRIDES = {
     "steps": 4,
     "eval_steps": 2,
@@ -99,9 +97,6 @@ def sha256(path):
 def write_json(path, value, mode="w"):
     with Path(path).open(mode) as handle:
         handle.write(json.dumps(value, indent=2, allow_nan=False) + "\n")
-
-
-# ---------------------------------------------------------------- preset -> argv
 
 
 def resolve_recipe(recipe=None, preset_dir=PRESET_DIR):
@@ -265,7 +260,7 @@ def check_recipe(preset):
         Path(flags["policy.pretrained_path"]).name == guards["base_revision"],
         "base path must be the approved original-base snapshot revision",
     )
-    if "init_adapter" in guards:  # optional: start LoRA from a previous run's adapter
+    if "init_adapter" in guards:
         relative_path(guards["init_adapter"])
     return preset
 
@@ -386,9 +381,6 @@ def planned_run_dir(root, name, smoke=False, now=None):
     return run
 
 
-# ---------------------------------------------------------------- schedule
-
-
 def build_scheduler(scheduler_cfg, optimizer, stop_steps):
     """Native cosine schedule with the decay horizon kept independent of the stop budget.
 
@@ -428,9 +420,6 @@ def schedule_samples(scheduler_cfg, stop_steps, steps):
     return {
         step: scheduler.base_lrs[0] * scheduler.lr_lambdas[0](step) for step in steps
     }
-
-
-# ---------------------------------------------------------------- assets and runtime
 
 
 def check_runtime(guards):
@@ -618,9 +607,6 @@ def check_saved_checkpoint(checkpoint_dir, step, flags):
     return {"step": step, "path": str(checkpoint_dir), "lr": last_lr}
 
 
-# ---------------------------------------------------------------- native validation
-
-
 def validate_native(argv):
     """Parse and validate the actual native TrainPipelineConfig without starting training."""
     from lerobot.configs import parser
@@ -633,10 +619,10 @@ def validate_native(argv):
         return cfg
 
     saved = sys.argv
-    sys.argv = ["lerobot-train", *argv]  # validate() re-reads path args from sys.argv
+    sys.argv = ["lerobot-train", *argv]
     try:
         return parse()
-    except SystemExit as exc:  # native parser reports decoding errors via sys.exit
+    except SystemExit as exc:
         raise TrainingConfigError(
             f"native configuration rejected (exit {exc.code})"
         ) from None
@@ -685,9 +671,7 @@ def effective_settings(cfg, flags):
         "relative_exclude_joints": list(cfg.policy.relative_exclude_joints),
         "chunk_size": cfg.policy.chunk_size,
         "dtype": str(cfg.policy.dtype),
-        "device_requested": flags[
-            "policy.device"
-        ],  # the CPU parse may report cpu; ranks use cuda
+        "device_requested": flags["policy.device"],
         "mixed_precision": cfg.accelerator.mixed_precision,
         "gradient_checkpointing": cfg.policy.gradient_checkpointing,
         "image_augmentation": cfg.dataset.image_transforms.enable,
@@ -728,9 +712,6 @@ def effective_settings(cfg, flags):
         )
     require(not Path(cfg.output_dir).exists(), "native output directory already exists")
     return effective
-
-
-# ---------------------------------------------------------------- launch
 
 
 def gpu_inventory(gpu_csv, apps_csv):
@@ -1068,7 +1049,6 @@ def launch(spec, root=ROOT):
             try:
                 print(run, flush=True)
                 with (run / "train.out").open("x") as log:
-                    # Revalidate the selected UUIDs immediately before torchrun; never wait or retry.
                     status["gpu_admission"] = check_idle_gpus(
                         query_gpus(), spec["gpu_selection"]
                     )
@@ -1082,8 +1062,6 @@ def launch(spec, root=ROOT):
                     )
                     status.update(status="running", torchrun_pid=proc.pid)
                     write_json(run / "status.json", status)
-                    # Admission done: let a run on another GPU launch while this one trains;
-                    # per-GPU reservations stay held until this child finishes or is stopped.
                     fcntl.flock(lock, fcntl.LOCK_UN)
                     status["returncode"] = proc.wait(
                         timeout=900 if record["smoke"] else None
@@ -1155,7 +1133,7 @@ def main(argv=None):
             spec["topology_candidates"] = {}
             for count in range(
                 1, preset["native_flags"]["parallelism.dp_replicate"] + 1
-            ):  # each launch-resolvable plan, on CPU
+            ):
                 try:
                     argv = build_native_argv(
                         preset, ROOT, Path(spec["run_dir"]) / "native", False, count
@@ -1168,7 +1146,7 @@ def main(argv=None):
                     )["effective"]
                 except TrainingConfigError as exc:
                     spec["topology_candidates"][str(count)] = f"unsupported: {exc}"
-        else:  # select idle eligible GPUs before building the effective native plan
+        else:
             spec = plan(
                 recipe,
                 smoke=args.smoke,

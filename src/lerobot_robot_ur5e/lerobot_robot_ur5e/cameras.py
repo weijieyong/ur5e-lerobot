@@ -6,8 +6,6 @@ from lerobot.cameras.utils import make_cameras_from_configs
 
 class RGBRealSenseCamera(RealSenseCamera):
     def _get_color_sensor(self):
-        # LeRobot 0.7.0 still requires a dedicated RGB sensor for manual controls.
-        # Our D405 captures RGB only, so selecting its shared Stereo Module is intentional.
         if self.rs_profile is not None and self.use_rgb and not self.use_depth:
             import pyrealsense2 as rs
 

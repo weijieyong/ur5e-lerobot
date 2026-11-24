@@ -40,7 +40,6 @@ def _env_int(name: str) -> int | None:
 
 
 def _env_gripper_force() -> int | None:
-    # ROLLOUT_GRIPPER_FORCE is the former rollout-only name; honour it for older machine configs.
     for name in ("GRIPPER_FORCE", "ROLLOUT_GRIPPER_FORCE"):
         value = _env_int(name)
         if value is not None:
@@ -48,7 +47,6 @@ def _env_gripper_force() -> int | None:
     return None
 
 
-# 0-255 force when GRIPPER_FORCE is unset; the RG2 scales 0-255 to 0-40 N, so 128 is about 20 N.
 DEFAULT_GRIPPER_FORCE = {"robotiq": 64, "onrobot_rg2": 128}
 
 
@@ -91,32 +89,23 @@ class UR5eConfig(RobotConfig):
     )
     timing_log_dir: str = field(default_factory=lambda: _env("TIMING_LOG_DIR"))
 
-    # Home pose (joint angles in degrees, base -> wrist 3). Set once at bring-up.
     home_joints_deg: list[float] = field(
         default_factory=lambda: _env_floats("UR5E_HOME_JOINTS_DEG")
     )
     home_speed_rad_s: float = 0.3
 
-    # servoJ streaming. `control_period_s` must equal 1 / recording fps.
     control_period_s: float = field(
         default_factory=lambda: 1 / float(_env("CONTROL_FPS", "15"))
     )
     servo_lookahead_s: float = 0.1
     servo_gain: float = 300.0
 
-    # Largest allowed change of any joint target from the measured joint angle, per control step.
-    # 0.05 rad at 15 Hz is ~0.75 rad/s of target increments; this is not a measured velocity guarantee.
     max_joint_step_rad: float = 0.05
 
-    # Gripper, reached through the controller: "robotiq" (2F-85, Robotiq URCap socket)
-    # or "onrobot_rg2" (RG2 on the tool flange, OnRobot URCap XML-RPC). "none" uses only the arm joints.
     gripper_type: str = field(default_factory=default_gripper_type)
-    gripper_port: int | None = None  # None: 63352 (Robotiq) or 41414 (OnRobot)
-    gripper_speed: int = 128  # 0-255; Robotiq only (the RG2 has no speed input)
-    # 0-255, shared by teleop, recording and rollout; the RG2 scales it linearly to 0-40 N.
-    # None (unset or empty GRIPPER_FORCE): the gripper type's DEFAULT_GRIPPER_FORCE.
+    gripper_port: int | None = None
+    gripper_speed: int = 128
     gripper_force: int | None = field(default_factory=_env_gripper_force)
-    # RG2 only: finger width for "closed". Closing on nothing at 0 mm latches the RG2 safety switch.
     gripper_close_width_mm: float = field(
         default_factory=lambda: float(_env("GRIPPER_CLOSE_WIDTH_MM", "8"))
     )
@@ -163,11 +152,8 @@ class UR5eConfig(RobotConfig):
 @TeleoperatorConfig.register_subclass("spacemouse")
 @dataclass
 class SpaceMouseConfig(TeleoperatorConfig):
-    # Must match the robot's IP: the teleoperator borrows that robot's UR connection for IK.
     robot_ip: str = field(default_factory=lambda: _env("UR5E_IP"))
 
-    # "xyz_yaw": translation + rotation about vertical (gripper orientation otherwise kept).
-    # "bounded": all six axes, roll/pitch limited about a saved neutral; "full": unrestricted.
     axes: str = field(default_factory=lambda: _env("SPACEMOUSE_AXES", "xyz_yaw"))
     neutral_rotvec: list[float] = field(
         default_factory=lambda: _env_floats("SPACEMOUSE_NEUTRAL_ROTVEC")
@@ -182,24 +168,17 @@ class SpaceMouseConfig(TeleoperatorConfig):
     max_angular_speed_rad_s: float = field(
         default_factory=lambda: float(_env("SPACEMOUSE_ANGULAR_SPEED_RAD_S", "0.5"))
     )
-    deadband: float = 0.1  # fraction of full deflection
-    full_scale: float = 350.0  # raw HID value at full deflection
+    deadband: float = 0.1
+    full_scale: float = 350.0
 
-    # Rotation of the operator's view about the robot base z axis: with 0, pushing the puck
-    # "forward" moves the gripper along base +x. Set at bring-up so "forward" = away from operator.
     operator_yaw_deg: float = field(
         default_factory=lambda: float(_env("SPACEMOUSE_OPERATOR_YAW_DEG", "0"))
     )
-    # Maps raw HID channels (report 1: 0-2, report 2: 3-5) to operator-frame (vx, vy, vz, wx, wy, wz):
-    # entry i is "<sign><raw channel>". Matches the reference project's HID convention:
-    # x,-y,-z,roll,-pitch,-yaw; raw rotation channels are Rx=3, Ry=4, Rz=5 (not LEGACY labels).
     axis_map: list[str] = field(
         default_factory=lambda: _env("SPACEMOUSE_AXIS_MAP", "+0 -1 -2 +3 -4 -5").split()
     )
 
-    # How far the commanded gripper position may run ahead of the measured one.
     max_lead_m: float = 0.02
-    # TCP position bounds in the robot base frame (m). Empty = unbounded; no ceiling.
     x_min_m: float | None = field(
         default_factory=lambda: (
             float(_env("UR5E_X_MIN_M")) if _env("UR5E_X_MIN_M") else None
@@ -225,10 +204,8 @@ class SpaceMouseConfig(TeleoperatorConfig):
             float(_env("UR5E_Z_MIN_M")) if _env("UR5E_Z_MIN_M") else None
         )
     )
-    # IK solutions further than this from the measured joints (any joint) are rejected.
     max_ik_jump_rad: float = 0.5
 
-    # Which SpaceMouse button closes / opens the gripper (0 = left, 1 = right).
     close_button: int = field(
         default_factory=lambda: int(_env("SPACEMOUSE_CLOSE_BUTTON", "0"))
     )
@@ -236,9 +213,7 @@ class SpaceMouseConfig(TeleoperatorConfig):
         default_factory=lambda: int(_env("SPACEMOUSE_OPEN_BUTTON", "1"))
     )
     home_key: str = "h"
-    stop_on_escape: bool = (
-        False  # teleop CLI enables this; record/rollout have their own Esc handlers
-    )
+    stop_on_escape: bool = False
 
     def __post_init__(self):
         valid = len(self.axis_map) == 6 and all(

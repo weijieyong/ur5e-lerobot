@@ -29,8 +29,6 @@ class RolloutConfigTests(unittest.TestCase):
         self.root = Path(self.directory.name)
         self.checkpoint = self.root / "checkpoint"
         ACTConfig(device="cpu").save_pretrained(self.checkpoint)
-        # Simulate a cached non-PI05 config: offline environment alone cannot
-        # prevent this config from substituting for a missing local deployment.
         self.hub = self.enterContext(
             patch(
                 "lerobot.configs.policies.hf_hub_download",
@@ -85,7 +83,6 @@ class RolloutConfigTests(unittest.TestCase):
 
     def config_args(self, path, suffix):
         config = self.root / f"rollout{suffix}"
-        # JSON is also valid YAML; exercise each native file dispatch.
         config.write_text(
             json.dumps(
                 {

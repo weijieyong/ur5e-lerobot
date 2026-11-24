@@ -1,4 +1,3 @@
-# Only source inputs; never copy host environments, credentials, models or data.
 **
 !pixi.toml
 !pixi.lock

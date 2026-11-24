@@ -21,8 +21,6 @@ from scripts.rollout_input import RolloutInput, RolloutTerminal, preflight
 @dataclass
 class RolloutConfig(upstream.RolloutConfig):
     def __post_init__(self):
-        # Native parser.get_path_arg handles CLI precedence and extracted YAML/JSON
-        # paths. Check before native __post_init__ can resolve a missing path on Hub.
         path = parser.get_path_arg("policy")
         if path is None and self.policy is not None:
             path = self.policy.pretrained_path
@@ -66,16 +64,14 @@ class ManualEpisodicStrategy(NativeStrategy):
         try:
             super().run(ctx)
         except StoppedBeforeStart:
-            pass  # Native finally still finalizes accepted episodes.
+            pass
         self.control.check()
 
     def _start_episode(self, robot, timer):
-        # Native start resumes before our admission check. Keep the engine paused
-        # until a fresh START passes measured-state and cancellation checks.
         self._engine.pause()
 
     def _reset_loop(self, **kwargs):
-        return  # Native save/discard first; the next policy loop owns READY.
+        return
 
     def _wait_ready(self, ctx, robot, timer):
         control = self.control
@@ -96,9 +92,8 @@ class ManualEpisodicStrategy(NativeStrategy):
                     control.check()
                     if events["stop_recording"] or ctx.runtime.shutdown_event.is_set():
                         raise StoppedBeforeStart
-                # Only this main control thread calls motion. Failure propagates.
                 robot.inner.go_home()
-                control.ready()  # Home never starts; measured state is checked on START.
+                control.ready()
             elif control.phase == "START_PENDING":
                 measured = joint_vector(
                     robot.inner.measured_joints(), "measured_joints (radians)"
@@ -124,13 +119,11 @@ class ManualEpisodicStrategy(NativeStrategy):
                     else:
                         accepted = max(errors) <= tolerance
                     if accepted:
-                        # Admission, task latch, reset and resume form one boundary.
                         self.active_task = control.current
                         self._engine.set_task(self.active_task)
                         self._engine.reset()
                         self._interpolator.reset()
                         timer.restart()
-                        # Recheck requests that arrived while reset was executing.
                         control.check()
                         if (
                             events["stop_recording"]
@@ -147,7 +140,6 @@ class ManualEpisodicStrategy(NativeStrategy):
                         "Use explicit h with a clear path or reset on pendant, then issue a fresh START."
                     )
                 control.ready()
-            # Observation checks remain live while paused; no action is sent.
             robot.get_observation()
             time.sleep(1 / ctx.runtime.cfg.fps)
 
@@ -191,7 +183,6 @@ class ManualEpisodicStrategy(NativeStrategy):
                 self.control.phase = "CLOSED"
         primary = sys.exception()
         cleanup_error = None
-        # A terminal restoration failure must not skip native dataset/hardware teardown.
         if self._listener is not None:
             try:
                 self._listener.stop()
@@ -217,7 +208,6 @@ def joint_vector(value, name):
         values = list(value)
         if len(values) != 6 or any(not math.isfinite(float(v)) for v in values):
             raise ValueError
-        # Reject nested arrays, rather than accepting float(array([x])).
         if any(getattr(v, "ndim", 0) != 0 for v in values):
             raise ValueError
         return [float(v) for v in values]
@@ -250,7 +240,6 @@ def run_rollout(cfg):
         "Wrapper settings: reset_to_initial_position=false return_to_initial_position=false; explicit h only",
         flush=True,
     )
-    # Native logging is initialized later; print before model loading or hardware setup.
     rtc = getattr(cfg.inference, "rtc", None)
     print(
         f"Rollout settings: max_joint_step_rad={getattr(cfg.robot, 'max_joint_step_rad', 'n/a')} "

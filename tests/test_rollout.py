@@ -60,7 +60,6 @@ class FakeEngine:
 
 class RolloutTests(unittest.TestCase):
     def test_preprocessor_copy_shares_the_live_policy_queue(self):
-        # RTC deep-copies the preprocessor; that copy must not duplicate the policy on the GPU.
         from copy import deepcopy
         from lerobot.processor import RelativeActionsProcessorStep
 
@@ -144,7 +143,6 @@ class RolloutTests(unittest.TestCase):
 
         def policy(strategy, **kwargs):
             tasks.append(strategy._engine.task)
-            # Busy editing/home is ignored; save/discard keys remain effective.
             strategy.control.key("t")
             strategy.control.key("h")
             self.assertEqual(strategy.control.phase, "RUNNING")
@@ -224,7 +222,6 @@ class RolloutTests(unittest.TestCase):
                         return np.zeros(6)
 
                     ctx.hardware.robot_wrapper.inner.measured_joints = measured
-                    # Refused START returns READY, then exit on the next poll.
                     observe = ctx.hardware.robot_wrapper.get_observation
                     polls = []
 
@@ -478,8 +475,6 @@ class RolloutTests(unittest.TestCase):
                 def policy(strategy, **kwargs):
                     events = kwargs["events"]
                     observed.append((events["exit_early"], events["rerecord_episode"]))
-                    # Supply a buffered frame so the fake dataset supports either
-                    # native save or discard; the native run loop owns that decision.
                     dataset.frames = 1
                     if events["exit_early"]:
                         events["exit_early"] = False
@@ -524,7 +519,6 @@ class RolloutTests(unittest.TestCase):
                     try:
                         strategy.run(ctx)
                     finally:
-                        # Always unblock resume and bound thread cleanup, including assertions.
                         resume_entered.set()
                         callback_done.set()
                         worker.join(2)
@@ -618,9 +612,7 @@ class RolloutTests(unittest.TestCase):
                 SpaceMouseConfig(axes="full", calibration_dir=Path(directory))
             )
             mouse.hid = SimpleNamespace(get_state=lambda: (np.zeros(6), 0))
-            mouse._gripper_cmd = (
-                0.0  # Prior READY phase was open; policy has since closed it.
-            )
+            mouse._gripper_cmd = 0.0
             mouse._home_requested.set()
             q = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
             robot = SimpleNamespace(
@@ -723,7 +715,6 @@ class RolloutTests(unittest.TestCase):
         def policy(strategy, **kwargs):
             self.assertTrue(strategy._engine.active)
             self.assertEqual(kwargs["control_time_s"], 5)
-            # Both the first START and subsequent unedited trials use the configured task.
             self.assertEqual(strategy._engine.task, ctx.runtime.cfg.dataset.single_task)
             phases.append(("policy", dataset.num_episodes))
             dataset.frames += 1

@@ -191,7 +191,6 @@ class Camera:
         return np.asanyarray(frame.get_data()).copy()
 
     def sample(self):
-        # Firmware controls and queued frames need time to catch up after a write.
         for _ in range(6):
             self.frame()
         return np.median([self.frame() for _ in range(5)], axis=0).astype(np.uint8)
@@ -318,7 +317,6 @@ def calibrate(camera, key, values, args, output):
         f"[{key}] tuning exposure/gain (exposure ceiling {max_exposure:g})...",
         flush=True,
     )
-    # A midtone patch leaves room to compare colour temperatures without clipping.
     tune_brightness(camera, roi, min(args.target, 160), max_exposure)
     print(f"[{key}] searching white balance...", flush=True)
     tune_white_balance(camera, roi)

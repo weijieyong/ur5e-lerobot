@@ -23,7 +23,6 @@ from scripts.train_lora_entry import load_spec
 BASELINE = tl.bind_dataset(
     tl.load_preset("training-2gpu"), "data/synthetic", "local/synthetic"
 )
-# Mathematical schedule variants used by these tests.
 BASELINE["native_flags"]["steps"] = 50000
 LOWLR = copy.deepcopy(BASELINE)
 LOWLR["native_flags"].update(
@@ -114,12 +113,8 @@ class ScheduleTests(unittest.TestCase):
         optimizer = torch.optim.AdamW(
             [torch.nn.Parameter(torch.zeros(1))], lr=cfg.peak_lr
         )
-        native = cfg.build(
-            optimizer, flags["steps"]
-        )  # what plain lerobot-train would do
-        self.assertAlmostEqual(
-            self.lr(native, 15000), 2.5e-6
-        )  # compressed: floor already at the stop
+        native = cfg.build(optimizer, flags["steps"])
+        self.assertAlmostEqual(self.lr(native, 15000), 2.5e-6)
         kept = tl.build_scheduler(cfg, optimizer, flags["steps"])
         self.assertTrue(
             math.isclose(self.lr(kept, 15000), 2.5e-6 + 2.25e-5 / 2, rel_tol=1e-12)
@@ -133,7 +128,6 @@ class ScheduleTests(unittest.TestCase):
             )
 
     def test_rebuilding_after_the_native_factory_drives_the_optimizer_lr(self):
-        # The worker receives the native (scaled) scheduler first, then rebuilds on the same optimizer.
         flags = LOWLR["native_flags"]
         cfg = self.scheduler(flags)
         optimizer = torch.optim.AdamW(
@@ -164,9 +158,7 @@ class ScheduleTests(unittest.TestCase):
         native = cfg.build(optimizer, flags["steps"])
         for step, value in samples.items():
             self.assertEqual(value, self.lr(native, step))
-        self.assertTrue(
-            math.isclose(samples[15000], 5.5e-5)
-        )  # matches the accepted 15k checkpoint
+        self.assertTrue(math.isclose(samples[15000], 5.5e-5))
 
 
 class RecipeGuardTests(unittest.TestCase):
@@ -530,7 +522,6 @@ class RecipeSelectionTests(unittest.TestCase):
         self.presets.mkdir(parents=True)
         bound = tl.bind_dataset(tl.load_preset(), "data/synthetic", "local/synthetic")
         self.preset = fake_assets(self.root, bound)
-        # Source recipes do not contain dataset inputs: the caller must supply both.
         del self.preset["native_flags"]["dataset.root"]
         del self.preset["native_flags"]["dataset.repo_id"]
         self.default = self.presets / "training.recipe.json"
@@ -913,9 +904,7 @@ class SelectedPlanReplayTests(unittest.TestCase):
             with self.assertRaisesRegex(tl.TrainingConfigError, pattern):
                 load_spec(run / "run.json", self.root, self.presets)
 
-        tampered(
-            lambda r: r.update(gpu_selection=TWO), "native argv"
-        )  # selection without matching argv
+        tampered(lambda r: r.update(gpu_selection=TWO), "native argv")
         tampered(
             lambda r: r.update(gpu_selection=[{"index": 2, "uuid": "GPU-c"}]),
             "eligible",
@@ -953,8 +942,8 @@ class LaunchSeamTests(unittest.TestCase):
 
     def test_idle_selection_prefers_both_and_falls_back_to_the_idle_one(self):
         self.assertEqual(self.select(), TWO)
-        self.assertEqual(self.select("GPU-a, 4242\n"), GPU1)  # GPU0 busy -> GPU1 only
-        self.assertEqual(self.select("GPU-b, 4242\n"), GPU0)  # GPU1 busy -> GPU0 only
+        self.assertEqual(self.select("GPU-a, 4242\n"), GPU1)
+        self.assertEqual(self.select("GPU-b, 4242\n"), GPU0)
         self.assertEqual(self.select(limit=1), GPU0)
         self.assertEqual(self.select("GPU-a, 4242\n", limit=1), GPU1)
         self.assertEqual(self.select("GPU-b, 4242\n", limit=1), GPU0)
@@ -1163,14 +1152,11 @@ class GpuAdmissionTests(unittest.TestCase):
 
         def during_run1():
             try:
-                # NVML still reports both GPUs idle; GPU1 is reserved by run 1.
                 with self.assertRaises(tl.TrainingConfigError):
                     tl.launch(spec_same, root=self.root)
-                # Partial acquisition of GPU0 followed by collision on GPU1 must release GPU0.
                 with self.assertRaises(tl.TrainingConfigError):
                     tl.launch(spec_both, root=self.root)
                 self.assertEqual(len(spawned), 1)
-                # Disjoint GPU0 launches concurrently while run 1 holds GPU1.
                 self.assertEqual(tl.launch(spec_gpu0, root=self.root), 0)
                 self.assertEqual(len(spawned), 2)
                 self.assertEqual(spawned[1].env["CUDA_VISIBLE_DEVICES"], "GPU-a")

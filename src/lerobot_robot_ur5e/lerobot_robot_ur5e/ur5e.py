@@ -26,12 +26,9 @@ log = logging.getLogger(__name__)
 
 JOINTS = [f"joint_{i}.pos" for i in range(6)]
 GRIPPER = "gripper.pos"
-# Before homing: wait for gripper position (0 open .. 1 closed) to reach this, or give up without moving.
 HOME_OPEN_POSITION = 0.05
 HOME_OPEN_TIMEOUT_S = 3.0
 
-# Connected robots by IP, so the SpaceMouse teleoperator in the same process can use the
-# robot's UR connection for IK and homing (only one control connection to the UR is possible).
 CONNECTED: dict[str, "UR5e"] = {}
 
 
@@ -40,10 +37,6 @@ def joint_features(gripper_enabled: bool) -> dict[str, type]:
     if gripper_enabled:
         features[GRIPPER] = float
     return features
-
-
-# Every gripper client provides: activate() (make ready; may move the fingers), check() (read-only
-# status summary, raises if not ready), position() (0 = open .. 1 = closed), grip(closed), close().
 
 
 class RobotiqSocket:
@@ -58,7 +51,7 @@ class RobotiqSocket:
         return self.sock.recv(1024).decode().strip()
 
     def get(self, var: str) -> int:
-        reply = self._cmd(f"GET {var}")  # e.g. "POS 3"
+        reply = self._cmd(f"GET {var}")
         fields = reply.split()
         if len(fields) != 2 or fields[0] != var:
             raise RuntimeError(f"Unexpected gripper reply to GET {var}: {reply!r}")
@@ -130,11 +123,9 @@ class OnRobotRG2:
         close_width_mm: float = 8.0,
         device: int = 0,
     ):
-        # The trailing slash matters: without it xmlrpc.client posts to /RPC2 and the URCap returns 404.
         self.url = f"http://{host}:{port}/"
         self.device = device
         self.force_n = force / 255 * self.MAX_FORCE_N
-        # Closing to 0 mm on nothing trips the S2 safety switch and latches the gripper until power-cycled.
         self.close_width_mm = close_width_mm
         self.open_width_mm: float | None = None
         self._proxy = xmlrpc.client.ServerProxy(self.url, transport=_TimeoutTransport())
@@ -160,7 +151,7 @@ class OnRobotRG2:
         return summary
 
     def activate(self) -> None:
-        self.check()  # the RG2 needs no activation motion; refuse to start unpowered or latched
+        self.check()
 
     def position(self) -> float:
         width = float(self._proxy.rg_get_width(self.device))
@@ -171,7 +162,6 @@ class OnRobotRG2:
         return min(max(1.0 - width / self.open_width_mm, 0.0), 1.0)
 
     def grip(self, closed: bool) -> None:
-        # The URCap ignores rg_grip while the fingers move; stop first so a reversal takes effect at once.
         if self._proxy.rg_get_busy(self.device):
             self._proxy.rg_stop(self.device)
         self._proxy.rg_grip(
@@ -181,7 +171,7 @@ class OnRobotRG2:
         )
 
     def close(self) -> None:
-        pass  # each XML-RPC call opens its own HTTP connection
+        pass
 
 
 def make_gripper(config: UR5eConfig) -> RobotiqSocket | OnRobotRG2 | None:
@@ -220,7 +210,6 @@ class UR5e(Robot):
         self._observation_timing = {}
         self._timing_file = None
 
-    # --- features -------------------------------------------------------------------------
     @property
     def _state_ft(self) -> dict[str, type]:
         return joint_features(self.config.gripper_enabled)
@@ -234,7 +223,6 @@ class UR5e(Robot):
     def action_features(self) -> dict:
         return self._state_ft
 
-    # --- lifecycle ------------------------------------------------------------------------
     @property
     def is_connected(self) -> bool:
         return self.rtde_c is not None and self.rtde_c.isConnected()
@@ -259,7 +247,6 @@ class UR5e(Robot):
         try:
             self.rtde_r = rtde_receive.RTDEReceiveInterface(ip)
             self.check_safety()
-            # Uploads the ur_rtde control script; the pendant must be in Remote Control mode.
             self.rtde_c = rtde_control.RTDEControlInterface(ip)
             self.gripper = make_gripper(self.config)
             if self.gripper is not None:
@@ -305,7 +292,6 @@ class UR5e(Robot):
         self._servo_active = False
         self.rtde_c = self.rtde_r = self.gripper = self._timing_file = None
 
-    # --- io ---------------------------------------------------------------------------------
     def check_safety(self) -> None:
         if self.rtde_r.isProtectiveStopped() or self.rtde_r.isEmergencyStopped():
             raise RuntimeError(
@@ -326,8 +312,6 @@ class UR5e(Robot):
         for key, cam in self.cameras.items():
             obs[key] = cam.read_latest(max_age_ms=self.config.camera_max_age_ms)
             if self.config.timing_log_dir:
-                # LeRobot 0.7.0 timestamps the buffer after host postprocessing, not at exposure.
-                # If a newer frame arrived after our read, don't associate its timestamp with this image.
                 with cam.frame_lock:
                     camera_ready[key] = (
                         cam.latest_timestamp
@@ -379,9 +363,6 @@ class UR5e(Robot):
             )
         self._servo_active = True
 
-        # LeRobot 0.7.0's record_loop still ignores send_action's return value and saves
-        # action_values. Its default identity processors share this dict with action_values;
-        # update it in place to record the clipped targets and any binary gripper command.
         if closed is not None:
             if closed != self._gripper_closed:
                 self.gripper.grip(closed)
@@ -431,7 +412,6 @@ class UR5e(Robot):
         self.rtde_c.servoStop()
         self._servo_active = False
         if self.config.gripper_enabled:
-            # Release any held object before moving so every trial starts at home with the gripper open.
             self.gripper.grip(False)
             self._gripper_closed = False
             deadline = time.monotonic() + HOME_OPEN_TIMEOUT_S

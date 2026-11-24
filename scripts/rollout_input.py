@@ -58,7 +58,6 @@ class RolloutInput:
             )
 
     def fail(self, error):
-        # Publish failure even while the main thread owns the admission lock.
         self.error = error
         apply_recording_control("esc", self.events)
         self.phase = "CLOSED"
@@ -70,9 +69,7 @@ class RolloutInput:
             ) from self.error
 
     def key(self, key):
-        # A busy callback must never wait for the main thread and replay in READY.
         if not self.lock.acquire(blocking=False):
-            # Stop requests still need to reach a START in progress.
             if key in ("q", "esc") and self.phase != "EDITING":
                 apply_recording_control("esc", self.events)
             elif key in ("r", "left", "n", "right") and self.phase in (
@@ -159,7 +156,6 @@ class RolloutTerminal(TerminalKeyListener):
     def start(self):
         preflight()
         try:
-            # Enable framing before the reader can consume any input.
             self._fd = sys.stdin.fileno()
             self.bracketed = True
             atexit.register(self.stop)
@@ -185,8 +181,6 @@ class RolloutTerminal(TerminalKeyListener):
 
     def feed(self, data):
         for value in data:
-            # Even after a lone-ESC timeout, consume a late sequence as a whole;
-            # its suffix must never become home/start/save/quit keys.
             if self.expired_escape:
                 self.expired_escape = False
                 if value in (ord("["), ord("O")):

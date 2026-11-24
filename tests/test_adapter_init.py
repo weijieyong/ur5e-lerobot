@@ -163,7 +163,6 @@ class AdapterInitTests(unittest.TestCase):
             self.assertTrue(torch.equal(param.detach(), before[name]), name)
 
     def test_rejects_key_mismatch(self):
-        # 1. Swapped-in base weight (exact Ada defect): preserve count, reject without mutating target.
         with self.subTest(case="smuggled_base_weight"):
             adapter_dir = self.root / "smuggled"
             _save_adapter(adapter_dir, offset=5.0, seed=4)
@@ -181,7 +180,6 @@ class AdapterInitTests(unittest.TestCase):
             for name, param in target.named_parameters():
                 self.assertTrue(torch.equal(param.detach(), before[name]), name)
 
-        # 2. Partial adapter (3 of 4 LoRA tensors).
         with self.subTest(case="partial_adapter"):
             adapter_dir = self.root / "partial"
             _save_adapter(adapter_dir, offset=8.0, seed=7)
@@ -192,7 +190,6 @@ class AdapterInitTests(unittest.TestCase):
             with self.assertRaises(tl.TrainingConfigError):
                 load_init_adapter(_build_peft_policy(seed=99), adapter_dir, self.guards)
 
-        # 3. Mixed VLM/expert targets (4 tensors, wrong modules).
         with self.subTest(case="mixed_vlm_and_expert"):
             adapter_dir = self.root / "mixed"
             _save_adapter(

@@ -104,12 +104,11 @@ class TeleopTests(unittest.TestCase):
 
     def test_outside_tilt_waits_for_home_and_resumes_without_changing_neutral(self):
         with self.session(home_at=3) as s:
-            s.robot.gripper = SimpleNamespace(position=lambda: 1.0)  # closed before h
+            s.robot.gripper = SimpleNamespace(position=lambda: 1.0)
             s.mouse._gripper_cmd = 1.0
             command.run_teleoperation(s.cfg)
             self.assertEqual(s.homes, [True])
             self.assertEqual(len(s.sent), 1)
-            # go_home opened it; teleop must not re-close.
             self.assertEqual(s.sent[0][GRIPPER], 0.0)
             self.assertEqual(s.output.getvalue().count("RECOVERY"), 1)
             self.assertIn("Press h", s.output.getvalue())

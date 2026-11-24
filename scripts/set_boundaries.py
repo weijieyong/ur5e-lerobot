@@ -17,8 +17,6 @@ from lerobot_robot_ur5e.spacemouse import SpaceMouse, TiltLimitError
 from lerobot_robot_ur5e.ur5e import UR5e
 
 
-# Sign is the inward margin. The two captures per side axis are sorted into min/max, so the
-# left/right and front/back order does not depend on which way the base is mounted.
 FACES = (
     ("Floor / base Z minimum", "UR5E_Z_MIN_M", 2, 1),
     ("Left side (base X)", "UR5E_X_MIN_M", 0, 1),
@@ -66,7 +64,6 @@ def capture_bounds(robot, mouse, fps):
             )
             while True:
                 tick = time.monotonic()
-                # Check input/tilt before accepting a measurement; h recovery remains available.
                 try:
                     action = mouse.get_action()
                 except TiltLimitError:
@@ -140,7 +137,6 @@ def main():
         raise ValueError("Teaching speeds and CONTROL_FPS must be finite and positive")
     if not math.isfinite(margin) or margin < 0:
         raise ValueError("UR5E_WORKSPACE_MARGIN_M must be finite and nonnegative")
-    # Teaching can replace an old box. Only position bounds are disabled, not tilt/joint guards.
     teaching = SpaceMouseConfig(
         x_min_m=None,
         x_max_m=None,

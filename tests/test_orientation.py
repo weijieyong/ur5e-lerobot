@@ -25,7 +25,6 @@ from lerobot_robot_ur5e.ur5e import CONNECTED, UR5e
 
 
 def pose(roll, pitch, yaw, neutral):
-    # Independent known ZYX construction; arguments are degrees.
     r, p, y = map(math.radians, (roll, pitch, yaw))
     Rx = np.array(
         [[1, 0, 0], [0, math.cos(r), -math.sin(r)], [0, math.sin(r), math.cos(r)]]
@@ -170,7 +169,7 @@ class OrientationTests(unittest.TestCase):
                         side_effect=lambda: next(clock),
                     ):
                         mouse.get_action()
-                        self.assertEqual(requests, [])  # no startup orientation snap
+                        self.assertEqual(requests, [])
                         for _ in range(20):
                             mouse.get_action()
                     neutral = rotvec_to_mat(np.array(config.neutral_rotvec))

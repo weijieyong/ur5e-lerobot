@@ -41,7 +41,6 @@ def load_local_pi05_adapter(config):
     if not adapter_file.is_file():
         raise FileNotFoundError(f"PI05 adapter weights are missing: {adapter_file}")
 
-    # Upstream PI05.from_pretrained catches failures and can return random weights.
     base_weights = load_file(str(base_file))
     policy = PI05Policy(config)
     policy.load_state_dict(policy._convert_openpi_state_dict(base_weights), strict=True)
