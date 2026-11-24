@@ -128,7 +128,6 @@ class TrainingStatsTests(unittest.TestCase):
             for field, value in IMAGENET_STATS.items():
                 np.testing.assert_allclose(stats[key][field], value)
 
-        # Independent complete-window enumeration: no cross-episode or padded starts.
         values = np.asarray(
             [
                 [offset + 2] * 6 + [(start + offset) % 2]
@@ -173,7 +172,6 @@ class TrainingStatsTests(unittest.TestCase):
             k: np.array(v[:, :6] if v.ndim == 2 else v, copy=True)
             for k, v in original.items()
         }
-        # Sixth arm joint exceeds [0, 1], catching accidental gripper range checks.
         self.assertGreater(float(rows["observation.state"][:, -1].max()), 1.0)
         self.assertGreater(float(rows["action"][:, -1].max()), 1.0)
 
@@ -201,7 +199,6 @@ class TrainingStatsTests(unittest.TestCase):
             for name, value in stats[key].items():
                 if name != "count":
                     self.assertEqual(np.asarray(value).shape, (6,))
-        # Complete 50-step windows yield relative offsets 2..51 across all six joints.
         np.testing.assert_allclose(stats["action"]["min"], [2.0] * 6, atol=1e-7)
         np.testing.assert_allclose(stats["action"]["max"], [51.0] * 6, atol=1e-7)
         np.testing.assert_allclose(stats["action"]["mean"], [26.5] * 6, atol=1e-7)

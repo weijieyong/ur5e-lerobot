@@ -88,7 +88,13 @@ runtime. Activation loads private settings and empties inherited `PYTHONPATH`,
 host Conda/venv or local shell customization is required. Keep the pinned stack:
 PyPI pyrealsense2 supplies distribution metadata required by LeRobot; the local
 camera factory handles D405 RGB-only sensor selection. SpaceMouse uses hidraw;
-see [the udev rule](../config/udev/99-3dconnexion.rules) for device permissions.
+[the udev rule](../config/udev/99-3dconnexion.rules) lets logged-in users and the
+`plugdev` group read it. Install it once per host:
+
+```bash
+sudo cp config/udev/99-3dconnexion.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
 
 Use `pixi install --locked` to reject lock drift, `pixi run --frozen <task>` for
 an existing lock, and `pixi run --as-is --dry-run <task>` to inspect a command.

@@ -82,7 +82,6 @@ class InputTests(unittest.TestCase):
             if phase == "EDITING":
                 listener.feed(b"new\r")
                 self.assertEqual(control.current, "previous")
-            # The next genuinely separate command is retained.
             control.ready()
             listener.feed(b"\x1bOC")
             self.assertEqual(control.phase, "START_PENDING")
@@ -150,7 +149,7 @@ class InputTests(unittest.TestCase):
             os.write(master, b"\r")
             self.wait_for(lambda: control.current == "抓é")
             os.write(master, b"\x1b[20")
-            time.sleep(0.08)  # CSI marker split longer than native escape timeout.
+            time.sleep(0.08)
             os.write(master, b"0~n\rhqr\x1b[20")
             time.sleep(0.08)
             os.write(master, b"1~")

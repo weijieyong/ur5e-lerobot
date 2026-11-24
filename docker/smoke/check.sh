@@ -3,7 +3,6 @@ set -euo pipefail
 
 step() { printf '\n==> %s\n' "$*"; }
 
-# Each docker run starts without a project environment or machine configuration.
 step "1/7 Check clean container"
 test ! -e .pixi
 test ! -e config/local

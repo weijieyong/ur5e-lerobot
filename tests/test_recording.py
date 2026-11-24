@@ -48,7 +48,6 @@ class RecordingTests(unittest.TestCase):
                 )
             )
             sent = []
-            # Stand-ins for external hardware only; use the real plugin and LeRobot loop/processors.
             robot.rtde_r = SimpleNamespace(
                 getActualQ=lambda: [0.0] * 6,
                 isProtectiveStopped=lambda: False,

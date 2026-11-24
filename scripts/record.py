@@ -71,7 +71,6 @@ class RecordingFeedback:
         from rerun.experimental import ViewerClient
         from lerobot.utils import rerun_visualization
 
-        # A separate viewer/port belongs only to this command, never an existing viewer.
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
@@ -88,7 +87,6 @@ class RecordingFeedback:
         native_build = rerun_visualization._build_blueprint
 
         def build_with_status(*paths):
-            # Keep LeRobot's default grid (and its growth); only add the phase/controls strip on top.
             return rrb.Blueprint(
                 rrb.Vertical(
                     rrb.Horizontal(
@@ -105,12 +103,9 @@ class RecordingFeedback:
                 )
             )
 
-        # LeRobot sends its own layout on the first frame; wrap its builder while this viewer lives.
         self._native_build_blueprint = native_build
         rerun_visualization._build_blueprint = build_with_status
-        rerun_visualization.log_rerun_data.blueprint = (
-            None  # As init_rerun: first frame builds the layout.
-        )
+        rerun_visualization.log_rerun_data.blueprint = None
         rerun_visualization.log_rerun_data.blueprint_paths = None
         rr.send_blueprint(build_with_status(set(), set(), set()))
         self.show("CONNECTING — NOT RECORDING\nWait for the robot to connect.")
@@ -128,13 +123,11 @@ class RecordingFeedback:
         dataset = kwargs.get("dataset")
         events = kwargs["events"]
         if dataset is None:
-            # Skip upstream's pre-save reset. Reset now happens in READY after save/discard.
             return
         self.dataset = dataset
         self.episode = dataset.num_episodes
         if self.first_episode is None:
             self.first_episode = self.episode
-        # Ignore next/retry inputs queued while saving. READY needs fresh operator input.
         events["exit_early"] = False
         events["rerecord_episode"] = False
         self.show(
@@ -161,11 +154,10 @@ class RecordingFeedback:
         )
         upstream.log_say("Recording started", self.cfg.play_sounds)
         if kwargs.get("timer") is not None:
-            kwargs["timer"].restart()  # READY is outside the recording cadence window.
+            kwargs["timer"].restart()
         try:
             result = self.control_loop(original_loop, **kwargs)
         except TiltLimitError:
-            # The native loop's exception cleanup stopped the asynchronous image writer.
             writer = getattr(dataset, "writer", None)
             image_writer = getattr(writer, "image_writer", None)
             if image_writer is not None:
@@ -191,13 +183,10 @@ class RecordingFeedback:
         return result
 
     def control_loop(self, original_loop, **kwargs):
-        # The operator controls all phase boundaries; ignore upstream episode/reset timers.
         kwargs["control_time_s"] = float("inf")
         events = kwargs["events"]
 
         def request_stop(signum, frame):
-            # Match Esc instead of interrupting the writer and losing the buffered episode.
-            # A second Ctrl+C can still interrupt a stuck control call.
             if events["stop_recording"]:
                 raise KeyboardInterrupt
             events["stop_recording"] = True
@@ -250,7 +239,6 @@ def run_recording(cfg):
             original_init(mode, **kwargs)
 
     def log_say(text, *args, **kwargs):
-        # Upstream announces an episode before our manual start gate; avoid a false cue.
         if text.startswith("Recording episode ") or text in {
             "Reset the environment",
             "Re-record episode",
@@ -266,7 +254,7 @@ def run_recording(cfg):
             dataset = upstream.record.__wrapped__(cfg)
         except StoppedBeforeStart:
             dataset = feedback.dataset
-        feedback.rr = None  # Upstream has already shut down the SDK during cleanup.
+        feedback.rr = None
         feedback.show(
             f"FINISHED — {dataset.num_episodes} saved episodes in the dataset."
         )

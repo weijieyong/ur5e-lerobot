@@ -71,7 +71,7 @@ class RTCQueueTests(unittest.TestCase):
         self.assertIsNone(first.continuation.model_actions)
         actions = torch.arange(20, dtype=torch.float32).reshape(20, 1)
         provenance = ActionProvenance(now[0], "pick")
-        now[0] += 0.3  # Five elapsed action intervals, zero actions actually consumed.
+        now[0] += 0.3
         self.assertTrue(
             runtime.accept(
                 first,
@@ -90,7 +90,7 @@ class RTCQueueTests(unittest.TestCase):
         torch.testing.assert_close(
             second.continuation.canonical_actions, actions[1:] + 100
         )
-        runtime.queue.get()  # Only one action consumed while the successor is being inferred.
+        runtime.queue.get()
         now[0] += 0.3
         self.assertTrue(
             runtime.accept(

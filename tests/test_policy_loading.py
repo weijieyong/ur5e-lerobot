@@ -245,9 +245,7 @@ class PolicyLoadingTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "stop before hardware"):
                 rollout.run_rollout(self.config)
-        self.assertIs(
-            seen[0], rollout.bind_relative_anchor
-        )  # installed while the context builds
+        self.assertIs(seen[0], rollout.bind_relative_anchor)
         self.assertIs(rollout.rollout_context.bind_relative_anchor, original_bind)
 
 

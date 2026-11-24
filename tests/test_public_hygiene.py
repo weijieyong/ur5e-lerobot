@@ -5,7 +5,6 @@ import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-# Git-ignored local state and the generated lockfile.
 SKIP_DIRS = {
     ".git",
     ".pixi",
@@ -22,7 +21,6 @@ PRIVATE = {
     "absolute user path": re.compile(
         r"(?<![\w/.-])/(home|media|Users)/[A-Za-z0-9_.-]+/"
     ),
-    # RFC 1918 ranges; tests use 127.0.0.1 and the RFC 5737 documentation range 192.0.2.x.
     "private network IP": re.compile(
         r"\b(10\.\d{1,3}|192\.168|172\.(1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b"
     ),

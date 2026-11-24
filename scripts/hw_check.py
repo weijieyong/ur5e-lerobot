@@ -51,10 +51,9 @@ def check_robot(ip: str) -> None:
             )
     finally:
         r.disconnect()
-    # Dashboard query only: never power on, release brakes, load or play a program.
     with socket.create_connection((ip, 29999), timeout=2.0) as dashboard:
         with dashboard.makefile("rb") as stream:
-            stream.readline()  # greeting
+            stream.readline()
             dashboard.sendall(b"is in remote control\n")
             remote = stream.readline().decode().strip().lower()
     print(f"[robot] remote control: {remote}")
@@ -66,9 +65,7 @@ def check_gripper() -> None:
     from lerobot_robot_ur5e.config_ur5e import UR5eConfig
     from lerobot_robot_ur5e.ur5e import make_gripper
 
-    g = make_gripper(
-        UR5eConfig(cameras={})
-    )  # never activate(): that may move the fingers
+    g = make_gripper(UR5eConfig(cameras={}))
     if g is None:
         print("[gripper] disabled (GRIPPER_TYPE=none)")
         return
@@ -180,7 +177,7 @@ if __name__ == "__main__":
             continue
         try:
             fn()
-        except Exception as e:  # keep going so one missing device doesn't hide the rest
+        except Exception as e:
             failures += 1
             print(f"[{name}] FAILED: {type(e).__name__}: {e}")
     raise SystemExit(1 if failures else 0)

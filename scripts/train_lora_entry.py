@@ -64,8 +64,6 @@ def load_spec(run_json, root=ROOT, preset_dir=PRESET_DIR):
         "preset file changed since launch",
     )
     check_recipe(preset)
-    # Topology is recomputed from the original preset and the declared GPU selection, never
-    # taken from run.json's effective flags.
     selection = check_selection(preset, spec.get("gpu_selection"))
     argv = build_native_argv(
         preset, root, run / "native", spec["smoke"], len(selection)
@@ -120,7 +118,6 @@ def fit_training_datasets(cfg, make_datasets=None):
     check_normalization(cfg.policy)
     require(train.meta.total_tasks == 1, "only single-task recordings are supported")
     arm = [f"joint_{i}.pos" for i in range(6)]
-    # Two supported layouts: six arm joints, optionally followed by the gripper.
     has_gripper = train.meta.features["action"].get("names") != arm
     names = arm + ["gripper.pos"] if has_gripper else arm
     dim = len(names)
@@ -140,7 +137,6 @@ def fit_training_datasets(cfg, make_datasets=None):
         policy.use_relative_actions and mask == [True] * 6 + [False] * has_gripper,
         "relative actions must subtract six arm joints and keep gripper absolute",
     )
-    # Selecting columns avoids image/video decoding and respects the native episode filter.
     rows = train.hf_dataset.select_columns(
         ["observation.state", "action", "episode_index"]
     ).with_format("numpy")
@@ -236,7 +232,7 @@ def prepare_optimizer_and_scheduler(
     """Optionally warm-start LoRA weights, verify trainability, and build fresh optimizer/scheduler."""
     import torch
 
-    if "init_adapter" in guards:  # previous run's LoRA weights, same LoRA config
+    if "init_adapter" in guards:
         load_init_adapter(policy, Path(root) / guards["init_adapter"], guards)
     trainable = {n: p for n, p in policy.named_parameters() if p.requires_grad}
     check_trainable(trainable, guards, expert_only)
@@ -259,9 +255,7 @@ def prepare_optimizer_and_scheduler(
         actual == {id(p) for p in trainable.values()},
         "optimizer trainable set mismatch",
     )
-    scheduler = build_scheduler(
-        cfg.scheduler, optimizer, cfg.steps
-    )  # keep decay horizon
+    scheduler = build_scheduler(cfg.scheduler, optimizer, cfg.steps)
     if "init_adapter" in guards:
         receipt["init_adapter"] = guards["init_adapter"]
     receipt.update(
@@ -324,7 +318,6 @@ def main(argv=None):
         receipt.update(gpu=torch.cuda.get_device_name(rank), native_argv=native_argv)
         write_json(run / f"rank-{rank}.startup.json", receipt)
 
-        # Original base: exactly one strict, clean native load with positive evidence.
         clean_loads = 0
         original_load = PI05Policy.load_state_dict
 

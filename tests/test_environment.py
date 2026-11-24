@@ -59,8 +59,6 @@ class EnvironmentTests(unittest.TestCase):
             "assert not os.environ.get('LD_LIBRARY_PATH'); "
             "assert sys.flags.no_user_site == 1 and not site.ENABLE_USER_SITE"
         )
-        # Reuse the parent's selected workspace target for CPU-only checks on
-        # hosts where CUDA virtual-package detection is unavailable.
         platforms = os.environ.get("PIXI_ENVIRONMENT_PLATFORMS", "").split(",")
         target = (
             ["--platform", platforms[0]] if len(platforms) == 1 and platforms[0] else []

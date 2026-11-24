@@ -1,5 +1,4 @@
 #!/usr/bin/env sh
-# Block the commit unless lint and offline tests pass. Enabled by `pixi run setup`.
 set -e
 pixi=$(command -v pixi || echo "$HOME/.pixi/bin/pixi")
 "$pixi" run lint

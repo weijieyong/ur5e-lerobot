@@ -52,10 +52,10 @@ class WorkspaceTests(unittest.TestCase):
                     side_effect=[0.0, 0.1, 0.2],
                 ),
             ):
-                mouse.get_action()  # Startup holds measured pose.
+                mouse.get_action()
                 self.assertEqual(targets, [])
                 mouse.get_action()
-                mouse.get_action()  # No accumulation of outward position at a wall.
+                mouse.get_action()
             return np.array(targets)[:, :3]
 
     def test_each_side_and_floor_clamps_but_top_is_unbounded(self):

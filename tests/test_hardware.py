@@ -186,9 +186,9 @@ class HardwareTests(unittest.TestCase):
             gripper = OnRobotRG2("192.0.2.1")
             self.addCleanup(gripper.close)
             gripper.activate()
-            urcap.width = 110.0 - 2 * urcap.offset  # fingers fully open
+            urcap.width = 110.0 - 2 * urcap.offset
             self.assertEqual(gripper.position(), 0.0)
-            urcap.width = 0.0  # fingers fully closed
+            urcap.width = 0.0
             self.assertEqual(gripper.position(), 1.0)
 
     def test_rg2_close_never_targets_zero_width(self):
@@ -197,9 +197,7 @@ class HardwareTests(unittest.TestCase):
             gripper = OnRobotRG2("192.0.2.1", close_width_mm=8.0)
             gripper.activate()
             gripper.grip(True)
-        self.assertEqual(
-            urcap.grips[0][1], 8.0
-        )  # 0 mm on nothing latches the RG2 safety switch
+        self.assertEqual(urcap.grips[0][1], 8.0)
         with self.assertRaisesRegex(ValueError, "above 0 mm"):
             UR5eConfig(
                 cameras={}, gripper_type="onrobot_rg2", gripper_close_width_mm=0.0
@@ -211,8 +209,8 @@ class HardwareTests(unittest.TestCase):
             gripper = OnRobotRG2("192.0.2.1")
             gripper.activate()
             gripper.grip(False)
-            self.assertEqual(urcap.stops, 0)  # idle: no stop needed
-            urcap.busy = True  # still opening when close is pressed
+            self.assertEqual(urcap.stops, 0)
+            urcap.busy = True
             gripper.grip(True)
         self.assertEqual(urcap.stops, 1)
         self.assertEqual(urcap.grips[-1][1], gripper.close_width_mm)
@@ -225,7 +223,7 @@ class HardwareTests(unittest.TestCase):
                 FakeOnRobotURCap(),
                 101.6,
                 "close width",
-            ),  # at the open width "closed" would not close
+            ),
         ):
             with (
                 self.subTest(message=message),
@@ -246,16 +244,12 @@ class HardwareTests(unittest.TestCase):
             with patch.dict("os.environ", {**clean, **env}, clear=True):
                 return UR5eConfig(cameras={}, gripper_type=gripper_type).gripper_force
 
-        self.assertEqual(force("onrobot_rg2"), 128)  # about 20 N
+        self.assertEqual(force("onrobot_rg2"), 128)
         self.assertEqual(force("robotiq"), 64)
-        self.assertEqual(
-            force("onrobot_rg2", GRIPPER_FORCE=""), 128
-        )  # empty means unset, not a crash
+        self.assertEqual(force("onrobot_rg2", GRIPPER_FORCE=""), 128)
         self.assertEqual(force("onrobot_rg2", GRIPPER_FORCE="255"), 255)
         self.assertEqual(force("onrobot_rg2", GRIPPER_FORCE="0"), 0)
-        self.assertEqual(
-            force("onrobot_rg2", ROLLOUT_GRIPPER_FORCE="200"), 200
-        )  # former name kept
+        self.assertEqual(force("onrobot_rg2", ROLLOUT_GRIPPER_FORCE="200"), 200)
         self.assertEqual(
             force("onrobot_rg2", GRIPPER_FORCE="90", ROLLOUT_GRIPPER_FORCE="200"), 90
         )
@@ -318,24 +312,20 @@ class HardwareTests(unittest.TestCase):
         wrapper.configure_hold()
         self.assertTrue(wrapper.supports_hold)
 
-        # Idle before any servoJ: hold checks safety without sending a redundant servoStop.
         wrapper.hold()
         self.assertEqual(stops, [])
 
-        # After servoJ, hold calls servoStop once; repeated held ticks skip redundant stops.
         action = {**dict.fromkeys(JOINTS, 0.0), GRIPPER: 0.0}
         wrapper.send_action(action)
         wrapper.hold()
         wrapper.hold()
         self.assertEqual(stops, ["stop"])
 
-        # Next send_action re-arms servo mode; rejected servoStop fails closed.
         wrapper.send_action(action)
         self.robot.rtde_c.servoStop = lambda: False
         with self.assertRaisesRegex(RuntimeError, "servoStop"):
             wrapper.hold()
 
-        # Protective stop fails closed even when servo mode is already idle.
         self.robot._servo_active = False
         self.robot.rtde_c.servoStop = lambda: True
         self.robot.rtde_r.isProtectiveStopped = lambda: True

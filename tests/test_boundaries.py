@@ -33,10 +33,9 @@ class BoundaryTests(unittest.TestCase):
             "UR5E_X_MAX_M": 0.49,
             "UR5E_X_MIN_M": -0.39,
         }
-        self.assertEqual(set(actual), set(expected))  # No ceiling setting.
+        self.assertEqual(set(actual), set(expected))
         for key in expected:
             self.assertAlmostEqual(actual[key], expected[key])
-        # Captures swapped by base orientation (this station's +Y faces the operator) are sorted.
         swapped = {**RAW, "UR5E_Y_MIN_M": 0.4, "UR5E_Y_MAX_M": -0.3}
         self.assertEqual(
             command.inset_bounds(swapped, 0.01), command.inset_bounds(RAW, 0.01)
@@ -75,8 +74,6 @@ class BoundaryTests(unittest.TestCase):
                     stopped.append(True)
 
             robot = Mock()
-            # Physical order: floor, left (-X), right (+X), front (-Y), back (+Y).
-            # Other coordinates differ so a swapped capture axis cannot pass unnoticed.
             poses = [
                 [0, 0, 0.05, 0, 0, 0],
                 [-0.4, 0.23, 0.5, 0, 0, 0],

@@ -25,7 +25,6 @@ class TiltLimitError(RuntimeError):
 VENDOR_3DCONNEXION = 0x256F
 
 
-# --- rotation helpers (UR poses use axis-angle rotation vectors) --------------------------------
 def rotvec_to_mat(r: np.ndarray) -> np.ndarray:
     theta = np.linalg.norm(r)
     if theta < 1e-12:
@@ -40,7 +39,7 @@ def mat_to_rotvec(R: np.ndarray) -> np.ndarray:
     theta = math.acos(cos)
     if theta < 1e-9:
         return np.zeros(3)
-    if math.pi - theta < 1e-6:  # near 180 deg: take axis from the symmetric part
+    if math.pi - theta < 1e-6:
         k = np.sqrt(np.clip((np.diag(R) + 1) / 2, 0, None))
         i = int(np.argmax(k))
         k = R[:, i] + np.eye(3)[:, i]
@@ -82,7 +81,6 @@ def limit_tilt(R: np.ndarray, neutral: np.ndarray, limit_rad: float) -> np.ndarr
     )
 
 
-# --- HID reader ----------------------------------------------------------------------------------
 def _hid():
     """hidapi's hidraw backend (uses the /dev/hidraw* udev permissions); the default `hid` module is libusb."""
     try:
@@ -96,7 +94,7 @@ class SpaceMouseHID:
     """Background reader for 3Dconnexion devices over hidraw (hidapi). Keeps the latest state."""
 
     def __init__(self):
-        self.axes = np.zeros(6)  # raw x, y, z, roll, pitch, yaw
+        self.axes = np.zeros(6)
         self.buttons = 0
         self._dev = None
         self._stop = threading.Event()
@@ -158,7 +156,7 @@ class SpaceMouseHID:
                 int.from_bytes(bytes(data[i : i + 2]), "little", signed=True)
                 for i in range(1, len(data) - 1, 2)
             ]
-            if rid == 1 and len(vals) >= 6:  # newer devices: all six axes in one report
+            if rid == 1 and len(vals) >= 6:
                 self.axes[:] = vals[:6]
             elif rid == 1:
                 self.axes[:3] = vals[:3]
@@ -194,9 +192,7 @@ class SpaceMouse(Teleoperator):
         self.config = config
         self.hid = SpaceMouseHID()
         self._connected = False
-        self._target_pose: np.ndarray | None = (
-            None  # [x, y, z, rx, ry, rz] in robot base frame
-        )
+        self._target_pose: np.ndarray | None = None
         self._q_target: np.ndarray | None = None
         self._gripper_cmd: float | None = None
         self._last_t: float | None = None
@@ -249,7 +245,6 @@ class SpaceMouse(Teleoperator):
         self._target_pose = self._q_target = self._last_t = self._gripper_cmd = None
         closed = getattr(CONNECTED.get(self.config.robot_ip), "_gripper_closed", None)
         if closed is not None:
-            # An object can stop closing below POS=127; keep the close intent, not that threshold.
             self._gripper_cmd = float(closed)
         self._home_requested.clear()
 
@@ -281,7 +276,7 @@ class SpaceMouse(Teleoperator):
             except Exception:
                 log.exception("SpaceMouse keyboard cleanup failed")
             self._key_listener = None
-        self._connected = False  # let LeRobot's following robot.disconnect() run even after an input cleanup error
+        self._connected = False
 
     def send_feedback(self, feedback: dict) -> None:
         pass
@@ -307,7 +302,6 @@ class SpaceMouse(Teleoperator):
                 "Return home with h (clear path), or restore the intended posture on the pendant."
             )
 
-    # --- core ---------------------------------------------------------------------------------
     def map_axes(self, axes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Convert a raw HID snapshot to the configured base-frame velocity; no robot access."""
         c = self.config
@@ -341,7 +335,7 @@ class SpaceMouse(Teleoperator):
             self._home_requested.clear()
             robot.go_home()
             if gripper_enabled:
-                self._gripper_cmd = 0.0  # go_home opened the gripper
+                self._gripper_cmd = 0.0
             self._target_pose = None
             self._last_t = None
             axes, buttons = self.hid.get_state()
@@ -361,7 +355,6 @@ class SpaceMouse(Teleoperator):
         self._last_t = now
 
         if gripper_enabled:
-            # Buttons latch a gripper command, initialized from the measured opening.
             if self._gripper_cmd is None:
                 self._gripper_cmd = float(robot.gripper.position() > 0.5)
             if buttons & (1 << c.close_button):
@@ -371,7 +364,6 @@ class SpaceMouse(Teleoperator):
 
         v, w = self.map_axes(axes)
         if self._target_pose is None or (not v.any() and not w.any()):
-            # Idle (or first call): re-anchor to where the arm actually is, so nothing winds up.
             self._target_pose = tcp_meas.copy()
             self._q_target = q_meas
         else:
@@ -388,14 +380,10 @@ class SpaceMouse(Teleoperator):
             upper = np.array(
                 [v if v is not None else np.inf for v in (c.x_max_m, c.y_max_m, None)]
             )
-            # Outside a saved boundary, allow gradual inward recovery without a snap.
-            # Within the box, clamp outward motion while allowing sliding along each face.
             pos = np.clip(
                 pos, np.minimum(lower, tcp_meas[:3]), np.maximum(upper, tcp_meas[:3])
             )
-            R = rotvec_to_mat(w * dt) @ rotvec_to_mat(
-                self._target_pose[3:]
-            )  # rotate about base axes
+            R = rotvec_to_mat(w * dt) @ rotvec_to_mat(self._target_pose[3:])
             if neutral is not None:
                 R = limit_tilt(R, neutral, tilt_limit)
             candidate = np.concatenate([pos, mat_to_rotvec(R)])
