@@ -7,8 +7,10 @@ import hashlib
 import io
 import json
 import math
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -19,7 +21,7 @@ from scripts import train_lora as tl
 from scripts.train_lora_entry import load_spec
 
 BASELINE = tl.bind_dataset(
-    tl.load_preset("reference-15k"), "data/synthetic", "local/synthetic"
+    tl.load_preset("training-2gpu"), "data/synthetic", "local/synthetic"
 )
 # Mathematical schedule variants used by these tests.
 BASELINE["native_flags"]["steps"] = 50000
@@ -235,7 +237,7 @@ class RecipeGuardTests(unittest.TestCase):
 
     def test_preset_names_and_files(self):
         with self.assertRaisesRegex(tl.TrainingConfigError, "invalid preset"):
-            tl.load_preset("../reference-15k")
+            tl.load_preset("../test-recipe")
         with self.assertRaisesRegex(tl.TrainingConfigError, "available"):
             tl.load_preset("lora-missing")
         with TemporaryDirectory() as tmp:
@@ -281,12 +283,12 @@ class PlanAndAssetTests(unittest.TestCase):
         self.preset = fake_assets(self.root, LOWLR)
         self.presets = Path(self.tmp.name) / "presets"
         self.presets.mkdir()
-        (self.presets / "reference-15k.recipe.json").write_text(json.dumps(self.preset))
+        (self.presets / "test-recipe.recipe.json").write_text(json.dumps(self.preset))
 
     def test_plan_validates_natively_without_creating_run_directories(self):
         now = dt.datetime(2026, 11, 11, 7, 0, tzinfo=dt.timezone.utc)
         spec = tl.plan(
-            "reference-15k",
+            "test-recipe",
             self.root,
             self.presets,
             now=now,
@@ -296,7 +298,7 @@ class PlanAndAssetTests(unittest.TestCase):
         self.assertFalse((self.root / tl.RUNS_SUBDIR).exists())
         self.assertEqual(
             spec["run_dir"],
-            str(self.root / tl.RUNS_SUBDIR / "reference-15k-20261111T070000.000000Z"),
+            str(self.root / tl.RUNS_SUBDIR / "test-recipe-20261111T070000.000000Z"),
         )
         self.assertEqual(
             spec["effective"]["base"],
@@ -308,7 +310,7 @@ class PlanAndAssetTests(unittest.TestCase):
         self.assertIn("--nproc_per_node=2", spec["torchrun"])
         self.assertTrue(math.isclose(spec["lr_at_step"]["15000"], 1.375e-5))
         later = tl.plan(
-            "reference-15k",
+            "test-recipe",
             self.root,
             self.presets,
             now=now + dt.timedelta(microseconds=1),
@@ -317,16 +319,16 @@ class PlanAndAssetTests(unittest.TestCase):
 
     def test_existing_run_directory_is_never_reused(self):
         now = dt.datetime(2026, 11, 11, 7, 0, tzinfo=dt.timezone.utc)
-        spec = tl.plan("reference-15k", self.root, self.presets, now=now, selection=TWO)
+        spec = tl.plan("test-recipe", self.root, self.presets, now=now, selection=TWO)
         run, _ = tl.write_run_record(spec)
         with self.assertRaisesRegex(tl.TrainingConfigError, "reuse"):
-            tl.plan("reference-15k", self.root, self.presets, now=now)
+            tl.plan("test-recipe", self.root, self.presets, now=now)
         with self.assertRaises(FileExistsError):
             tl.write_run_record(spec)
         self.assertTrue((run / "run.json").is_file())
 
     def test_worker_recomputes_the_launcher_argv_and_refuses_drift(self):
-        spec = tl.plan("reference-15k", self.root, self.presets, selection=TWO)
+        spec = tl.plan("test-recipe", self.root, self.presets, selection=TWO)
         run, _ = tl.write_run_record(spec)
         loaded, preset, loaded_run, argv = load_spec(
             run / "run.json", self.root, self.presets
@@ -334,7 +336,7 @@ class PlanAndAssetTests(unittest.TestCase):
         self.assertEqual(argv, spec["native_argv"])
         self.assertEqual(loaded_run, run)
         edited = mutated(self.preset, native_flags__steps=20000)
-        (self.presets / "reference-15k.recipe.json").write_text(json.dumps(edited))
+        (self.presets / "test-recipe.recipe.json").write_text(json.dumps(edited))
         with self.assertRaisesRegex(tl.TrainingConfigError, "preset file changed"):
             load_spec(run / "run.json", self.root, self.presets)
 
@@ -382,6 +384,30 @@ class PlanAndAssetTests(unittest.TestCase):
                 (base / "adapter_config.json").unlink(missing_ok=True)
                 for path, data in snapshot.items():
                     path.write_bytes(data)
+
+    def test_init_adapter_must_be_relative_and_present(self):
+        preset = mutated(self.preset, guards__init_adapter="runs/old/pretrained_model")
+        with self.assertRaisesRegex(tl.TrainingConfigError, "init adapter missing"):
+            tl.check_assets(preset, self.root)
+        adapter = self.root / "runs/old/pretrained_model"
+        adapter.mkdir(parents=True)
+        (adapter / "adapter_model.safetensors").write_bytes(b"x")
+        with self.assertRaisesRegex(tl.TrainingConfigError, "init adapter config missing"):
+            tl.check_assets(preset, self.root)
+        cfg = {
+            "peft_type": "LORA",
+            "r": preset["native_flags"]["peft.r"],
+            "lora_alpha": preset["native_flags"]["peft.lora_alpha"],
+        }
+        (adapter / "adapter_config.json").write_text(
+            json.dumps({**cfg, "init_lora_weights": "pissa"})
+        )
+        with self.assertRaisesRegex(tl.TrainingConfigError, "init_lora_weights"):
+            tl.check_assets(preset, self.root)
+        (adapter / "adapter_config.json").write_text(json.dumps(cfg))
+        self.assertIn("init_adapter", tl.check_assets(preset, self.root))
+        with self.assertRaisesRegex(tl.TrainingConfigError, "project-relative"):
+            tl.check_recipe(mutated(preset, guards__init_adapter="/abs/path"))
 
     def test_trainable_set_guard(self):
         names = [f"model.gemma_expert.layers.{i}.lora_A.weight" for i in range(80)]
@@ -492,15 +518,29 @@ class RecipeSelectionTests(unittest.TestCase):
         path.write_text(json.dumps(preset))
         return path
 
-    def test_gpu_profiles_keep_reference_settings_and_resolve_default_path(self):
+    def test_supplied_recipes_and_default_path(self):
         default = tl.load_preset()
-        reference = tl.load_preset("reference-15k")
-        for recipe, ranks, batch in ((default, 1, 8), (tl.load_preset("training-2gpu"), 2, 4)):
-            expected = copy.deepcopy(reference)
+        for recipe, ranks, batch in (
+            (default, 1, 8),
+            (tl.load_preset("training-2gpu"), 2, 4),
+            (tl.load_preset("training-warm-start"), 1, 8),
+        ):
+            expected = copy.deepcopy(default)
             expected.update(name=recipe["name"], summary=recipe["summary"])
             expected["native_flags"].update(
-                {"parallelism.dp_replicate": ranks, "batch_size": batch, "steps": 30000}
+                {"parallelism.dp_replicate": ranks, "batch_size": batch}
             )
+            if recipe["name"] == "training-warm-start":
+                expected["native_flags"].update(
+                    {
+                        "policy.optimizer_lr": 5e-5,
+                        "policy.scheduler_decay_lr": 5e-6,
+                        "policy.scheduler_warmup_steps": 500,
+                    }
+                )
+                expected["guards"]["init_adapter"] = (
+                    "outputs/training-runs/REPLACE_WITH_RUN/native/checkpoints/030000/pretrained_model"
+                )
             self.assertEqual(recipe, expected)
         self.assertEqual(
             tl.resolve_recipe("config/training/training.recipe.json"),
@@ -716,7 +756,7 @@ class TopologyTests(unittest.TestCase):
     def test_only_topology_flags_change_and_preset_bytes_are_untouched(self):
         before = {
             n: (tl.PRESET_DIR / f"{n}.recipe.json").read_bytes()
-            for n in ("reference-15k",)
+            for n in ("training", "training-2gpu", "training-warm-start")
         }
         nominal = tl.parse_argv(tl.build_native_argv(LOWLR, tl.ROOT, "/x/native"))
         for count in (1, 2):
@@ -743,7 +783,7 @@ class TopologyTests(unittest.TestCase):
             {n: (tl.PRESET_DIR / f"{n}.recipe.json").read_bytes() for n in before},
         )
         self.assertEqual(
-            tl.load_preset("reference-15k")["native_flags"]["policy.optimizer_lr"], 1e-4
+            tl.load_preset("training-2gpu")["native_flags"]["policy.optimizer_lr"], 1e-4
         )
 
     def test_selection_must_be_eligible_unique_and_well_formed(self):
@@ -805,7 +845,7 @@ class SelectedPlanReplayTests(unittest.TestCase):
         for selection, per_rank in ((GPU1, 8), (GPU0, 8), (TWO, 4)):
             with self.subTest(selection=selection):
                 spec = tl.plan(
-                    "reference-15k", self.root, self.presets, selection=selection
+                    "test-recipe", self.root, self.presets, selection=selection
                 )
                 self.assertIn(f"--nproc_per_node={len(selection)}", spec["torchrun"])
                 self.assertEqual(
@@ -827,7 +867,7 @@ class SelectedPlanReplayTests(unittest.TestCase):
                 self.assertEqual(argv, spec["native_argv"])
 
     def test_rank_replay_detects_tampered_selection_argv_or_world(self):
-        spec = tl.plan("reference-15k", self.root, self.presets, selection=GPU1)
+        spec = tl.plan("test-recipe", self.root, self.presets, selection=GPU1)
         run, _ = tl.write_run_record(spec)
         original = json.loads((run / "run.json").read_text())
 
@@ -949,7 +989,7 @@ class LaunchSeamTests(unittest.TestCase):
             self.assertEqual(
                 tl.main(
                     [
-                        "reference-15k",
+                        "test-recipe",
                         "--dataset-root",
                         "data/synthetic",
                         "--repo-id",
@@ -1009,6 +1049,141 @@ class LaunchSeamTests(unittest.TestCase):
                 2,
             )
         self.assertIn("REJECTED", err.getvalue())
+
+
+class GpuAdmissionTests(unittest.TestCase):
+    IDLE = "0, GPU-a, 15, 0\n1, GPU-b, 15, 0\n"
+    BASE_NOW = dt.datetime(2026, 11, 23, 9, 0, tzinfo=dt.timezone.utc)
+
+    def setUp(self):
+        PlanAndAssetTests.setUp(self)
+        self._seq = 0
+
+    def _plan(self, selection):
+        self._seq += 1
+        return tl.plan(
+            "test-recipe",
+            self.root,
+            self.presets,
+            now=self.BASE_NOW + dt.timedelta(seconds=self._seq),
+            selection=selection,
+        )
+
+    def _make_proc(self, cmd, env, pid, on_wait=None):
+        class _FakeProc:
+            def __init__(self):
+                self.cmd, self.env, self.pid, self._rc = list(cmd), dict(env), pid, None
+
+            def poll(self):
+                return self._rc
+
+            def wait(self, timeout=None):
+                if on_wait is not None:
+                    on_wait()
+                run_json = Path(self.cmd[self.cmd.index("--run") + 1])
+                world = json.loads(run_json.read_text())["effective"]["world_size"]
+                for rank in range(world):
+                    (run_json.parent / f"rank-{rank}.json").write_text(
+                        json.dumps({"status": "success", "rank": rank})
+                    )
+                self._rc = 0
+                return 0
+
+        return _FakeProc()
+
+    @contextlib.contextmanager
+    def _harness(self, popen):
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("RANK", "LOCAL_RANK", "WORLD_SIZE")
+        }
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.object(
+                tl.sys, "prefix", str(self.root / ".pixi" / "envs" / "default")
+            ),
+            patch.object(
+                tl.shutil,
+                "disk_usage",
+                return_value=SimpleNamespace(free=100 * 1024**3),
+            ),
+            patch.object(tl, "stop_owned_group"),
+            patch.object(
+                tl, "query_gpus", side_effect=lambda: tl.gpu_inventory(self.IDLE, "")
+            ),
+            patch.object(tl.subprocess, "Popen", side_effect=popen),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            yield
+
+    def test_gpu_reservation_blocks_overlap_allows_disjoint_and_releases(self):
+        spawned, nested_err = [], []
+        spec_gpu1 = self._plan(GPU1)
+        spec_same = self._plan(GPU1)
+        spec_both = self._plan(TWO)
+        spec_gpu0 = self._plan(GPU0)
+        spec_after = self._plan(GPU1)
+
+        def during_run1():
+            try:
+                # NVML still reports both GPUs idle; GPU1 is reserved by run 1.
+                with self.assertRaises(tl.TrainingConfigError):
+                    tl.launch(spec_same, root=self.root)
+                # Partial acquisition of GPU0 followed by collision on GPU1 must release GPU0.
+                with self.assertRaises(tl.TrainingConfigError):
+                    tl.launch(spec_both, root=self.root)
+                self.assertEqual(len(spawned), 1)
+                # Disjoint GPU0 launches concurrently while run 1 holds GPU1.
+                self.assertEqual(tl.launch(spec_gpu0, root=self.root), 0)
+                self.assertEqual(len(spawned), 2)
+                self.assertEqual(spawned[1].env["CUDA_VISIBLE_DEVICES"], "GPU-a")
+            except BaseException as exc:
+                nested_err.append(exc)
+                raise
+
+        def fake_popen(cmd, **kwargs):
+            idx = len(spawned)
+            proc = self._make_proc(
+                cmd,
+                kwargs["env"],
+                10000 + idx,
+                on_wait=during_run1 if idx == 0 else None,
+            )
+            spawned.append(proc)
+            return proc
+
+        with self._harness(fake_popen):
+            rc1 = tl.launch(spec_gpu1, root=self.root)
+            if nested_err:
+                raise nested_err[0]
+            self.assertEqual(rc1, 0)
+            self.assertEqual(tl.launch(spec_after, root=self.root), 0)
+        self.assertEqual(
+            [p.env["CUDA_VISIBLE_DEVICES"] for p in spawned],
+            ["GPU-b", "GPU-a", "GPU-b"],
+        )
+
+    def test_gpu_lock_released_after_popen_error(self):
+        calls = 0
+
+        def flaky_popen(cmd, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError("spawn failed")
+            return self._make_proc(cmd, kwargs["env"], 20000)
+
+        spec1, spec2 = self._plan(GPU0), self._plan(GPU0)
+        with self._harness(flaky_popen):
+            self.assertEqual(tl.launch(spec1, root=self.root), 1)
+            self.assertEqual(tl.launch(spec2, root=self.root), 0)
+        self.assertEqual(calls, 2)
+        self.assertEqual(
+            json.loads((Path(spec1["run_dir"]) / "status.json").read_text())["status"],
+            "failed",
+        )
 
 
 class ExampleConfigTests(unittest.TestCase):

@@ -81,7 +81,7 @@ class TrainingStatsTests(unittest.TestCase):
 
     def config(self):
         preset = tl.bind_dataset(
-            tl.load_preset("reference-15k"), "raw-video", "local/synthetic_video"
+            tl.load_preset("training-2gpu"), "raw-video", "local/synthetic_video"
         )
         cfg = tl.validate_native(
             tl.build_native_argv(preset, self.root, self.root / "native")

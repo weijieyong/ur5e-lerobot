@@ -114,8 +114,7 @@ pixi run train data/local/new-recording-filtered local/new-recording-filtered --
 
 Direct module invocation accepts the same `--recipe` option, without the Pixi
 separator. Recipe paths are project-relative or absolute. Run-directory labels
-come from the selected filename, not its internal `name`. The legacy positional
-`reference-15k` module argument still selects the reference recipe.
+come from the selected filename, not its internal `name`.
 
 Evaluation (`eval_steps`) and saving (`save_freq`) can use separate intervals.
 Set `eval_steps=0` to disable development evaluation; the held-out split is still
@@ -126,8 +125,9 @@ The stop budget need not be a multiple of `save_freq`; the final checkpoint is
 still required and verified. `--smoke` overrides the budget and eval/save intervals
 for its four-update mechanics check, not a learning result.
 
-The supported route is local, single-task, fresh-base training: no streaming or
-resume. Native splitting holds out the last ceil(episodes × 0.2) episodes **per task**,
+The supported route is local, single-task training from the original base, optionally
+warm-starting its LoRA weights. Streaming and optimizer-state resume are not supported.
+Native splitting holds out the last ceil(episodes × 0.2) episodes **per task**,
 not a random frame sample. Both training and development episodes must exist.
 Use matching six-joint radians plus normalized `gripper.pos` state/action order,
 recorder camera identities and the collection/control rate of 15 Hz. `train-check` and
@@ -161,10 +161,9 @@ Default settings:
 - Precision and data: BF16, no augmentation, seed 1000.
 - Full development evaluation and save every 2500 steps.
 
-The original `reference-15k.recipe.json` remains available as a 15000-step reference.
-Neither recipe guarantees results on new data.
+These settings do not guarantee results on new data.
 
-Both recipes allow physical GPU indices 0 and 1. `guards.gpus` lists eligible cards;
+The supplied recipes allow physical GPU indices 0 and 1. `guards.gpus` lists eligible cards;
 `parallelism.dp_replicate` caps how many to use. The default selects one idle card,
 preferring GPU 0 and falling back to GPU 1. The two-GPU recipe selects both when
 idle, with batch 4 per GPU; if only one is idle, it uses batch 8 on that card. The
@@ -176,6 +175,30 @@ jobs. Version, source, base hash, strict loading, optimizer, LoRA tensor, schedu
 and save guards stay in force.
 Run the operator-authorized GPU smoke/save and strict reload checks before a long
 run. Every run has a new `outputs/training-runs/` directory.
+
+## Warm-start from a saved adapter
+
+Use `config/training/training-warm-start.recipe.json` to start from a previous
+run's LoRA weights. Replace `guards.init_adapter` with the project-relative path
+to that checkpoint's `pretrained_model` directory (replace `REPLACE_WITH_RUN` and
+the checkpoint number). It must contain `adapter_config.json` and
+`adapter_model.safetensors`, and match the original base, LoRA targets, rank 32
+and alpha 64. Keep the original checkpoint unchanged.
+
+```sh
+pixi run train-check data/local/new-recording-filtered local/new-recording-filtered -- --recipe config/training/training-warm-start.recipe.json
+pixi run train data/local/new-recording-filtered local/new-recording-filtered -- --recipe config/training/training-warm-start.recipe.json --smoke
+pixi run train data/local/new-recording-filtered local/new-recording-filtered -- --recipe config/training/training-warm-start.recipe.json
+```
+
+This is **not resume**: only adapter weights are restored. The optimizer and
+learning-rate schedule restart, normalization is fitted on the current training
+split, and `steps` counts new updates. The sample uses a lower peak learning rate
+of `5e-5`, decay learning rate `5e-6`, and 500 warmup steps. Other settings match
+the single-GPU default. These are starting points for refinement, not a measured
+optimum; adjust the learning rate and update budget for your experiment.
+`train-check` validates configuration and adapter metadata, not the full tensor
+load; the worker checks adapter keys and shapes before optimization.
 
 ## Deploy for rollout
 

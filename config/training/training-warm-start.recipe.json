@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "name": "reference-15k",
-  "summary": "Fresh-base higher-LR reference through 15000 updates; explicit dataset inputs, automatic train-only normalization",
+  "name": "training-warm-start",
+  "summary": "Single-GPU LoRA warm-start for 30000 new updates; replace guards.init_adapter with a compatible saved adapter directory; fresh optimizer and schedule",
   "native_flags": {
     "dataset.eval_split": 0.2,
     "dataset.streaming": false,
@@ -21,21 +21,21 @@
     "policy.gradient_checkpointing": true,
     "policy.compile_model": false,
     "policy.push_to_hub": false,
-    "policy.optimizer_lr": 0.0001,
-    "policy.scheduler_decay_lr": 1e-05,
-    "policy.scheduler_warmup_steps": 1000,
+    "policy.optimizer_lr": 5e-05,
+    "policy.scheduler_decay_lr": 5e-06,
+    "policy.scheduler_warmup_steps": 500,
     "policy.scheduler_decay_steps": 30000,
     "policy.optimizer_weight_decay": 0.01,
     "policy.optimizer_grad_clip_norm": 1.0,
     "peft.method_type": "LORA",
     "peft.r": 32,
     "peft.lora_alpha": 64,
-    "parallelism.dp_replicate": 2,
+    "parallelism.dp_replicate": 1,
     "parallelism.dp_shard": 1,
     "accelerator.gradient_accumulation.steps": 1,
     "accelerator.mixed_precision": "bf16",
-    "batch_size": 4,
-    "steps": 15000,
+    "batch_size": 8,
+    "steps": 30000,
     "num_workers": 2,
     "dataloader_multiprocessing_context": "spawn",
     "seed": 1000,
@@ -60,6 +60,7 @@
     "base_revision": "22c30e5b34f9e7ab738b1b34fc2fc5ecfe2d28f0",
     "base_bytes": 14467165872,
     "base_sha256": "0eb11ca9587678c1d2ef8cf32807c29f8ce53a2bfdfc1aa4a4c96f16fca59b0f",
-    "trainable_lora_tensors": 80
+    "trainable_lora_tensors": 80,
+    "init_adapter": "outputs/training-runs/REPLACE_WITH_RUN/native/checkpoints/030000/pretrained_model"
   }
 }
