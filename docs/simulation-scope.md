@@ -1,7 +1,7 @@
 # Simulation Scope: Minimal UR5e Pick-and-Place Demo
 
-> **Implementation checkpoint — scripted-teacher collection accepted as the minimal route.**
-> CPU physics, rendering and native v3.0 recording have been exercised; manual operator checks remain incomplete. Training, fresh trained-checkpoint reload and learned-policy rollout are not yet verified or authorized to run.
+> **Documentation-only phase — finite local GPU pilot completed; P1, P3, and P4 passed; P2 partially verified; L1 executed and failed (`0/5` learned successes).**
+> Scripted-teacher collection is accepted as the minimal route; the completed pilot ran `10` teacher episodes through `1,000`-update expert-only pi0.5 LoRA training (`config/training/sim-pilot.recipe.json`), strict fresh-process reload, and `5` teacher-free RTC rollout attempts (`0/5` verified successes; fixed layout only, no learned-success, reliability, or generalization claim; evidence: `outputs/simulation-learning-ram40-1574807730323984446/`). Manual operator and GUI checks remain incomplete. Prior pilot authority is spent; no new execution, downloads/installations, remote access, physical motion, or git staging/commit/push/publication is authorized now.
 
 **Baseline:** `56faae027fc0c1532c9323da362963a6d1bc3be1`, including six-joint/no-gripper support and pi0.5 VLM + action expert LoRA. The executable checkpoint has independent source review and retained offline/runtime evidence. Documentation review and teacher success do not establish learned-policy performance. Detailed review provenance and raw evidence remain local under ignored `outputs/`.
 
@@ -9,19 +9,18 @@
 
 Keep the four authority layers strictly separated:
 
-1. **Latest user start authority (active):** Supersedes the documentation-only HOLD for bounded implementation of the minimal UR5e + Robotiq 2F-85 simulation slice, routine project-local Pixi dependency locking/install (`mujoco-python`), pinned public Menagerie assets with upstream licenses/provenance, and CPU simulator verification for plumbing gates **P1** and **P2**.
-2. **Operational bounds:** Worktree write isolation, cycle-time/download/evidence/CPU runtime caps, no GPU compute, no model weight loading/inference, no remote host access/probes, and no real hardware motion. A separate local checkpoint commit is authorized; push/publication and further runtime budgets are not.
-3. **Still-unset owner training budgets (OPEN — P3/P4/L1 NOT authorized):** Training machine, GPU, storage, time, and finite run budgets remain **UNSET**. No remote machine may be accessed or probed, and no weights/training/model execution (`train-check` if model-accessing, `--smoke`, finite training, or learned rollout) may run until separate owner authorization resolves them.
-4. **Rollout inference mode and physical parity (OPEN — UNRESOLVED):** Existing physical UR5e rollout uses **RTC** (`pixi.toml`, `scripts/rollout.py`). The historical synchronous default (`--inference.type=sync`) is **not accepted**. Simulation rollout targets the RTC-compatible path (`--inference.type=rtc`), never silently falls back to synchronous inference, and claims no tested RTC parity. Keep RTC tuning out of scope until the owner resolves required parity.
+1. **Current authority (active — documentation-only):** Scope is limited to maintaining status documentation here. No new training, rollout, model execution, downloads/installations, remote access, physical motion, or git staging/commit/push/publication is authorized without fresh owner approval.
+2. **Completed pilot authority (historical — spent):** Prior owner approvals covered the bounded CPU simulation slice (`mujoco-python`, pinned Menagerie assets, P1/P2 checks) and one finite local GPU pilot under a `40 GiB` RAM cap sharing only existing persistent services, using the `1,000` optimizer-update / `60`-minute training and `5`-evaluation / `10`-minute limits. That budget is consumed and grants no new execution authority; cached offline models and token auth are not ongoing blockers.
+3. **Future run and publication budgets (OPEN — NOT authorized now):** Any subsequent training, tuning, rollout, manual check, or git commit/push/publication requires explicit new owner authorization with fresh compute, storage, and time limits.
+4. **Rollout inference mode and physical parity (OPEN — UNRESOLVED):** Existing physical UR5e rollout uses **RTC** (`pixi.toml`, `scripts/rollout.py`). The historical synchronous default (`--inference.type=sync`) is **not accepted**. Simulation rollout targets the RTC-compatible path (`--inference.type=rtc`), never silently falls back to synchronous inference, and claims no tested RTC parity. The completed pilot measured a `12.45 Hz` software loop against the `15 Hz` nominal target, with no claimed causal explanation of the `0/5` outcome. Keep RTC tuning out of scope until the owner resolves required parity.
 
 ## Ordered Next Steps
 
-1. **Minimal CPU simulation slice & P1/P2 verification (authorized now):** Implement the minimal MuJoCo env, pinned Menagerie UR5e + Robotiq 2F-85 assets, scripted physics teacher, thin simulation rollout glue, and offline tests; execute **P1** (live reset/step/contact/render grasp-lift-release-settle) and **P2** (native `lerobot-record` save/discard/exit + native `lerobot-edit-dataset` info/filtered copy) with evidence under ignored `outputs/`.
-   - *Done when:* P1 and P2 runtime evidence is recorded under ignored `outputs/`, offline `pixi run lint` and `pixi run test` pass, and fresh independent review inspects the changed source.
-2. **Owner resolution of remaining open decisions:** Obtain explicit owner resolutions for rollout RTC/parity acceptance and training compute/storage/time/finite budgets.
-   - *Done when:* both remaining open owner decisions are explicitly recorded by the owner.
-3. **Training mechanics & strict reload gates P3–P4 (blocked on Step 2; NOT authorized now):** Run `train-check`, GPU `--smoke`, and fresh-process strict reload (`scripts/policy_loading.py` + `validate_checkpoint` + unchanged saved normalizer stats).
-4. **Finite learning run & closed-loop learned rollout gate L1 (blocked on separate owner run authority; NOT authorized now):** Run the authorized finite training budget, repeat P4 on the finite checkpoint, and run closed-loop learned simulation rollout gate L1 (`>= 1/5` verified learned successes with no teacher).
+1. **Minimal CPU simulation slice & P1/P2 verification (P1 passed; P2 partially verified):** Implemented the minimal MuJoCo env, pinned Menagerie UR5e + Robotiq 2F-85 assets, scripted physics teacher, thin simulation rollout glue, and offline tests. **P1** passed and the accepted scripted collection/curation critical path completed; manual operator and GUI checks under **P2** remain incomplete and are not prerequisites to the completed pilot.
+2. **Finite local GPU pilot — P3, P4, and L1 (completed under spent pilot authority):** Executed the `1,000`-update finite training run (passing **P3** directly without a separate `--smoke` run), verified strict fresh-process reload (**P4** passed), and ran `5` teacher-free RTC rollout attempts (**L1** executed and failed at `0/5`; details in Acceptance Gates and `outputs/simulation-learning-ram40-1574807730323984446/`).
+3. **Owner decisions (current gate — documentation-only now):** Obtain explicit owner decisions on committing the verified checkpoint delta, resolving RTC physical parity (Open Decision #4), and authorizing any follow-on run budget or remaining manual operator/GUI checks.
+   - *Done when:* the owner records explicit authorization for the chosen next action.
+4. **Follow-on learning run & re-evaluation of L1 (blocked on Step 3; NOT authorized now):** Only under fresh owner run authority, run any follow-on training budget, repeat **P4** on any new checkpoint, and re-run closed-loop learned simulation rollout gate **L1** (`>= 1/5` verified learned successes with no teacher).
 
 ## Task and Learner Journey
 
@@ -30,16 +29,18 @@ Keep the four authority layers strictly separated:
 - **Learner journey (end-to-end):**
   1. **See** live rendered simulation collection (`front` and `wrist` RGB views, 7-D robot state, and action).
   2. **Curate** native LeRobot v3.0 datasets via native inspection, visualization, and filtered copies (`delete_episodes`; raw recordings stay immutable).
-  3. **Train** (later phase, not authorized now) with the existing pi0.5 LoRA route (`scripts/train_lora.py`, `config/training/*.recipe.json`).
-  4. **Reload** (later phase, not authorized now) the saved checkpoint and unchanged saved processors in a fresh process through the strict fail-closed loader (`scripts/policy_loading.py`).
-  5. **Roll out** (later phase, not authorized now) closed-loop in simulation with the learned policy only, reviewing saved simulation-rollout videos.
+  3. **Train** with the existing pi0.5 LoRA route (`scripts/train_lora.py`, `config/training/*.recipe.json`, including `sim-pilot.recipe.json`) — exercised once in the completed pilot; new runs require fresh owner authority.
+  4. **Reload** the saved checkpoint and unchanged saved processors in a fresh process through the strict fail-closed loader (`scripts/policy_loading.py`) — verified in the completed pilot.
+  5. **Roll out** closed-loop in simulation with the learned policy only, reviewing saved simulation-rollout videos — exercised in the completed pilot (`0/5` successes); new runs require fresh owner authority.
 - **Teacher separation & glossary boundary:** The scripted physics teacher exists for data collection only and is reported strictly as *teacher evidence*; it never runs during simulation rollout and never counts as learned success. Physical `GLOSSARY.md` terms (**Demonstration** and **Rollout**) remain reserved for the real-robot workflow.
 
 ## Reuse vs. Minimal New Code
 
 - **Reuse unchanged:**
   - LeRobot 0.7.0 native `SimRobot`, `LocalVectorEnv` + local Gymnasium integration, native `lerobot-record`, native `LeRobotDataset` v3.0 writer, and native dataset tools (`lerobot-edit-dataset`, `lerobot-dataset-viz`).
-  - Existing physical hardware plugin (`UR5e` including six-joint/no-gripper support, `SpaceMouse`, `scripts/record.py`, `scripts/rollout.py`), training route (`scripts/train_lora.py`, `scripts/train_lora_entry.py`, `config/training/*.recipe.json` including VLM + expert LoRA), strict fail-closed LoRA loader (`scripts/policy_loading.py`), and native episodic rollout engine (`EpisodicStrategy`, `RolloutContext`, plus shared `RolloutConfig` and `bind_relative_anchor` from `scripts/rollout.py`).
+  - Existing physical hardware plugin (`UR5e` including six-joint/no-gripper support, `SpaceMouse`, `scripts/record.py`, `scripts/rollout.py`), strict fail-closed LoRA loader (`scripts/policy_loading.py`), and native episodic rollout engine (`EpisodicStrategy`, `RolloutContext`, plus shared `RolloutConfig` and `bind_relative_anchor` from `scripts/rollout.py`).
+- **Reused training route with scoped additions:**
+  - Existing pi0.5 LoRA training route (`scripts/train_lora.py`, `scripts/train_lora_entry.py`, `config/training/*.recipe.json` including VLM + expert LoRA) reused with scoped GPU admission, resource/telemetry, and `TMPDIR` guard fixes plus `config/training/sim-pilot.recipe.json`; no replacement trainer.
 - **Minimal new task-specific code only:**
   - Pinned Menagerie UR5e + Robotiq 2F-85 assets (with upstream licenses and `PROVENANCE.md`) and composed MuJoCo scene (`table`, red cube, blue tray, `front` and `wrist` cameras).
   - Small Gymnasium environment (`UR5ePickPlaceEnv`) and registered LeRobot `EnvConfig` (`ur5e_sim`).
@@ -67,18 +68,18 @@ Keep the four authority layers strictly separated:
 
 ## Acceptance Gates
 
-> Run evidence belongs under ignored `outputs/<topic>-<date>/`, never in tracked docs. Gates **P3**, **P4**, and **L1** are **UNEXECUTED and NOT AUTHORIZED** in this phase. Offline `pixi run lint` and `pixi run test` supplement — never replace — live physics and native writer execution.
+> Raw run logs, models, datasets, and receipts belong under ignored `outputs/<topic>-<date>/` (completed pilot evidence: `outputs/simulation-learning-ram40-1574807730323984446/`); tracked docs carry only brief maintained status and result summaries. Gates **P3**, **P4**, and **L1** ran in the completed pilot; no new execution is authorized in the current documentation-only phase. Offline `pixi run lint` and `pixi run test` supplement — never replace — live physics and native writer execution.
 
 ### Pipeline-Execution Gates (Plumbing — Necessary, Insufficient for Learning)
 
-- **P1. Environment (authorized in this phase):** Live simulator `reset`/`step` runs; `front` and `wrist` render non-blank RGB that changes with motion; env descriptor matches the 15 Hz / 7-D / 2-camera contract; genuine physical grasp, lift, carry, release, and rest in tray pass both the explicit success predicate and video review.
-- **P2. Native recording & curation (authorized in this phase):** Native `lerobot-record` lifecycle (start, stop/save, discard, exit matching `num_episodes`) writes a 15 Hz v3.0 dataset with valid schema and playable front/wrist videos; native `lerobot-edit-dataset` inspection and filtered copy (`delete_episodes`) verify while leaving the original intact.
-- **P3. Existing training mechanics (`--smoke`) — UNEXECUTED / NOT AUTHORIZED:** `train-check` followed by GPU `--smoke` verifying dataloader, image decoding, train-only normalization fitting, optimizer updates, and `check_saved_checkpoint`.
-- **P4. Fresh-process strict reload — UNEXECUTED / NOT AUTHORIZED:** Fresh process reloads the saved adapter through `scripts/policy_loading.py` with zero missing/unexpected keys, passes native `validate_checkpoint`, and preserves saved normalizer tensors unchanged.
+- **P1. Environment — PASSED:** Live simulator `reset`/`step` runs; `front` and `wrist` render non-blank RGB that changes with motion; env descriptor matches the 15 Hz / 7-D / 2-camera contract; genuine physical grasp, lift, carry, release, and rest in tray pass both the explicit success predicate and video review.
+- **P2. Native recording & curation — PARTIALLY VERIFIED:** Native `lerobot-record` lifecycle (start, stop/save, discard, exit matching `num_episodes`) writes a 15 Hz v3.0 dataset with valid schema and playable front/wrist videos; native `lerobot-edit-dataset` inspection and filtered copy (`delete_episodes`) verify while leaving the original intact. The accepted scripted collection/curation route verified `10` deterministic fixed-layout episodes (`2,170` frames; train `0–7` / dev `8–9`, train-only stats); manual operator and GUI checks remain incomplete and are not prerequisites to the completed pilot.
+- **P3. Existing training mechanics — PASSED (via 1,000-update finite run):** Verified dataloader, image decoding, train-only normalization fitting, optimizer updates, and saved checkpoint integrity directly on the `1,000`-update finite run (`config/training/sim-pilot.recipe.json`, batch `1`, expert-only pi0.5 LoRA with `80` trainable tensors and VLM frozen; all `80` adapter tensors changed from step `250` to `1000`; no separate `--smoke` run was executed).
+- **P4. Fresh-process strict reload — PASSED:** Fresh process reloaded the saved base model and adapter through `scripts/policy_loading.py` with zero missing/unexpected keys, passed native `validate_checkpoint`, and verified all `180` saved processor normalization tensors identical.
 
-### Useful Learned-Outcome Gate (Learning — UNEXECUTED / NOT AUTHORIZED)
+### Useful Learned-Outcome Gate (Learning — EXECUTED / FAILED)
 
-- **L1. Closed-loop learned simulation rollout — UNEXECUTED / NOT AUTHORIZED:** Reloaded finite-trained learned policy runs closed-loop with **no teacher** for **5 attempts** from matched fixed resets; report every started attempt, cross-check predicate successes against saved video; pass requires `>= 1/5` verified learned successes (fixed layout only — no reliability, generalization, safety, or sim-to-real claim).
+- **L1. Closed-loop learned simulation rollout — EXECUTED / FAILED (`0/5`):** Reloaded finite-trained learned policy runs closed-loop with **no teacher** for **5 attempts** from matched fixed resets; report every started attempt, cross-check predicate successes against saved video; pass requires `>= 1/5` verified learned successes (fixed layout only — no learned-success, reliability, generalization, safety, or sim-to-real claim). Completed pilot result: `5` teacher-free policy-only RTC attempts started and recorded (`0` discarded, `1,540` frames, `12.45 Hz` measured software loop vs. `15 Hz` nominal target, no claimed causal explanation of failure) with `0/5` verified successes cross-checked against saved videos.
 
 ## Source-of-Truth Pointers
 

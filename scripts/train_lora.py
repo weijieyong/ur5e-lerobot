@@ -734,7 +734,7 @@ def effective_settings(cfg, flags):
 
 
 def gpu_inventory(gpu_csv, apps_csv):
-    """Parse nvidia-smi CSV (index,uuid,memory MiB,util %) and (gpu_uuid,pid); fail closed."""
+    """Parse nvidia-smi CSV (index,uuid,memory MiB,util %) and (gpu_uuid,pid[,used_memory MiB]); fail closed."""
     inventory = {}
     try:
         for line in filter(str.strip, gpu_csv.splitlines()):
@@ -751,12 +751,20 @@ def gpu_inventory(gpu_csv, apps_csv):
                 "memory_mib": int(memory),
                 "util_pct": int(util),
                 "pids": [],
+                "app_memory_mib": {},
             }
         by_uuid = {g["uuid"]: g for g in inventory.values()}
         for line in filter(str.strip, apps_csv.splitlines()):
-            uuid, pid = (c.strip() for c in line.split(","))
+            cols = [c.strip() for c in line.split(",")]
+            require(len(cols) in (2, 3), f"malformed compute app row {line!r}")
+            uuid, pid = cols[0], int(cols[1])
             require(uuid in by_uuid, f"compute process on unknown GPU {line!r}")
-            by_uuid[uuid]["pids"].append(int(pid))
+            if pid not in by_uuid[uuid]["pids"]:
+                by_uuid[uuid]["pids"].append(pid)
+            if len(cols) == 3:
+                by_uuid[uuid]["app_memory_mib"][pid] = (
+                    by_uuid[uuid]["app_memory_mib"].get(pid, 0) + int(cols[2])
+                )
     except ValueError as exc:
         raise TrainingConfigError(f"malformed nvidia-smi output: {exc}") from None
     require(inventory, "nvidia-smi reported no GPUs")
@@ -768,29 +776,260 @@ def is_idle(gpu):
     return not gpu["pids"] and gpu["memory_mib"] < 512 and gpu["util_pct"] == 0
 
 
-def select_idle_gpus(inventory, eligible, limit=None):
-    """Select up to limit idle eligible GPUs in index order; refuse if none."""
+ALLOWLIST_KEYS = frozenset(
+    {
+        "schema",
+        "gpu_uuid",
+        "max_background_memory_mib",
+        "max_noncompute_memory_mib",
+        "max_background_util_pct",
+        "allowed_processes",
+    }
+)
+ALLOWLIST_PROC_KEYS = frozenset(
+    {"pid", "starttime", "exe", "uid", "cgroup", "max_memory_mib"}
+)
+
+
+def check_gpu_allowlist(doc):
+    """Validate an explicit run-scoped background GPU service allowlist; fail closed."""
+    require(
+        isinstance(doc, dict) and set(doc) == ALLOWLIST_KEYS,
+        "gpu allowlist must contain exact schema keys",
+    )
+    require(
+        type(doc["schema"]) is int and doc["schema"] == 1,
+        "gpu allowlist schema must be 1",
+    )
+    uuid = doc["gpu_uuid"]
+    require(
+        isinstance(uuid, str) and re.fullmatch(r"GPU-[A-Za-z0-9_-]+", uuid) is not None,
+        f"malformed allowlist gpu_uuid {uuid!r}",
+    )
+    max_bg = doc["max_background_memory_mib"]
+    max_noncompute = doc["max_noncompute_memory_mib"]
+    max_util = doc["max_background_util_pct"]
+    require(
+        type(max_bg) is int and 0 < max_bg <= 4096,
+        f"max_background_memory_mib must be an integer in (0, 4096], got {max_bg!r}",
+    )
+    require(
+        type(max_noncompute) is int and 0 <= max_noncompute <= max_bg,
+        f"max_noncompute_memory_mib must be in [0, {max_bg}], got {max_noncompute!r}",
+    )
+    require(
+        type(max_util) is int and 0 <= max_util <= 10,
+        f"max_background_util_pct must be an integer in [0, 10], got {max_util!r}",
+    )
+    procs = doc["allowed_processes"]
+    require(
+        isinstance(procs, list) and len(procs) > 0,
+        "gpu allowlist allowed_processes must be a non-empty list",
+    )
+    seen_pids = set()
+    for entry in procs:
+        require(
+            isinstance(entry, dict) and set(entry) == ALLOWLIST_PROC_KEYS,
+            f"malformed allowlist process entry {entry!r}",
+        )
+        pid = entry["pid"]
+        require(
+            type(pid) is int and pid > 0 and pid not in seen_pids,
+            f"allowlist pid must be a unique positive integer, got {pid!r}",
+        )
+        seen_pids.add(pid)
+        require(
+            type(entry["starttime"]) is int and entry["starttime"] > 0,
+            f"allowlist starttime for pid {pid} must be a positive integer",
+        )
+        exe = entry["exe"]
+        require(
+            isinstance(exe, str) and exe.startswith("/") and "\x00" not in exe,
+            f"allowlist exe for pid {pid} must be an absolute path",
+        )
+        require(
+            type(entry["uid"]) is int and entry["uid"] >= 0,
+            f"allowlist uid for pid {pid} must be a non-negative integer",
+        )
+        cgroup = entry["cgroup"]
+        require(
+            isinstance(cgroup, str) and bool(cgroup) and cgroup == cgroup.strip(),
+            f"allowlist cgroup for pid {pid} must be a non-empty stripped string",
+        )
+        mem = entry["max_memory_mib"]
+        require(
+            type(mem) is int and 0 < mem <= max_bg,
+            f"allowlist max_memory_mib for pid {pid} must be in (0, {max_bg}]",
+        )
+    return doc
+
+
+def load_gpu_allowlist(path):
+    """Load and validate a run-scoped GPU allowlist JSON file."""
+    file_path = Path(path)
+    require(file_path.is_file(), f"gpu allowlist file missing: {file_path}")
+    try:
+        doc = json.loads(file_path.read_text())
+    except (OSError, ValueError) as exc:
+        raise TrainingConfigError(f"invalid gpu allowlist {file_path}: {exc}") from None
+    check_gpu_allowlist(doc)
+    return doc, {
+        "file": str(file_path.resolve()),
+        "sha256": sha256(file_path),
+        "gpu_uuid": doc["gpu_uuid"],
+        "max_background_memory_mib": doc["max_background_memory_mib"],
+        "max_noncompute_memory_mib": doc["max_noncompute_memory_mib"],
+        "max_background_util_pct": doc["max_background_util_pct"],
+        "allowed_pids": [p["pid"] for p in doc["allowed_processes"]],
+    }
+
+
+def read_proc_identity(pid):
+    """Read live Linux /proc identity (starttime, exe, uid, cgroup); return None on any failure."""
+    base = Path("/proc") / str(pid)
+    try:
+        stat = (base / "stat").read_text()
+        rparen = stat.rfind(")")
+        if rparen < 0:
+            return None
+        fields = stat[rparen + 2 :].split()
+        if len(fields) <= 19:
+            return None
+        starttime = int(fields[19])
+        exe = os.readlink(base / "exe")
+        real_uid = eff_uid = None
+        for line in (base / "status").read_text().splitlines():
+            if line.startswith("Uid:"):
+                parts = line.split()
+                if len(parts) >= 3:
+                    real_uid, eff_uid = int(parts[1]), int(parts[2])
+                break
+        if real_uid is None or real_uid != eff_uid:
+            return None
+        cgroup = (base / "cgroup").read_text().strip()
+        if not cgroup:
+            return None
+        return {
+            "pid": pid,
+            "starttime": starttime,
+            "exe": exe,
+            "uid": real_uid,
+            "cgroup": cgroup,
+        }
+    except (OSError, ValueError):
+        return None
+
+
+def verify_gpu_admission(gpu, allowlist=None, read_proc=None):
+    """Verify GPU is idle, or matches an explicit run-scoped allowlist for its exact UUID."""
+    if allowlist is None or gpu["uuid"] != allowlist["gpu_uuid"]:
+        require(
+            not gpu["pids"],
+            f"selected GPU {gpu['index']} already has compute processes: {gpu['pids']}",
+        )
+        require(is_idle(gpu), f"selected GPU {gpu['index']} is not idle: {gpu}")
+        return {**gpu, "admission_mode": "strict_idle"}
+
+    reader = read_proc_identity if read_proc is None else read_proc
+    check_gpu_allowlist(allowlist)
+    require(
+        gpu["util_pct"] <= allowlist["max_background_util_pct"],
+        f"GPU {gpu['index']} util {gpu['util_pct']}% exceeds allowlist ceiling "
+        f"{allowlist['max_background_util_pct']}%",
+    )
+    require(
+        gpu["memory_mib"] <= allowlist["max_background_memory_mib"],
+        f"GPU {gpu['index']} memory {gpu['memory_mib']}MiB exceeds allowlist total ceiling "
+        f"{allowlist['max_background_memory_mib']}MiB",
+    )
+    allowed_by_pid = {p["pid"]: p for p in allowlist["allowed_processes"]}
+    app_mem = gpu.get("app_memory_mib", {})
+    verified_procs = []
+    compute_mem_total = 0
+    for pid in gpu["pids"]:
+        expected = allowed_by_pid.get(pid)
+        require(
+            expected is not None,
+            f"GPU {gpu['index']} has unapproved compute process pid={pid}",
+        )
+        require(
+            pid in app_mem and type(app_mem[pid]) is int and app_mem[pid] >= 0,
+            f"GPU {gpu['index']} missing per-process VRAM accounting for pid={pid}",
+        )
+        pid_mem = app_mem[pid]
+        require(
+            pid_mem <= expected["max_memory_mib"],
+            f"GPU {gpu['index']} allowlisted pid={pid} uses {pid_mem}MiB > "
+            f"max_memory_mib={expected['max_memory_mib']}MiB",
+        )
+        live = reader(pid)
+        require(
+            live is not None,
+            f"GPU {gpu['index']} cannot verify live /proc identity for pid={pid}",
+        )
+        for field in ("starttime", "exe", "uid", "cgroup"):
+            require(
+                live.get(field) == expected[field],
+                f"GPU {gpu['index']} pid={pid} identity mismatch on {field}: "
+                f"live={live.get(field)!r} != expected={expected[field]!r}",
+            )
+        compute_mem_total += pid_mem
+        verified_procs.append({**live, "memory_mib": pid_mem})
+
+    noncompute_mem = gpu["memory_mib"] - compute_mem_total
+    require(
+        noncompute_mem >= 0,
+        f"GPU {gpu['index']} inconsistent VRAM accounting: total={gpu['memory_mib']}MiB < "
+        f"compute={compute_mem_total}MiB",
+    )
+    require(
+        noncompute_mem <= allowlist["max_noncompute_memory_mib"],
+        f"GPU {gpu['index']} non-compute VRAM {noncompute_mem}MiB exceeds allowlist ceiling "
+        f"{allowlist['max_noncompute_memory_mib']}MiB",
+    )
+    return {
+        **gpu,
+        "admission_mode": "run_scoped_allowlist",
+        "compute_memory_mib": compute_mem_total,
+        "noncompute_memory_mib": noncompute_mem,
+        "verified_processes": verified_procs,
+    }
+
+
+def select_idle_gpus(inventory, eligible, limit=None, allowlist=None, read_proc=None):
+    """Select up to limit admissible eligible GPUs in index order; refuse if none."""
+    if allowlist is not None:
+        check_gpu_allowlist(allowlist)
     present = [g for g in sorted(eligible) if g in inventory]
     require(present, f"none of the eligible GPUs {sorted(eligible)} is present")
-    idle = [
-        {"index": g, "uuid": inventory[g]["uuid"]}
-        for g in present
-        if is_idle(inventory[g])
-    ]
+    admitted = []
+    rejections = []
+    for g in present:
+        if allowlist is None or inventory[g]["uuid"] != allowlist["gpu_uuid"]:
+            if is_idle(inventory[g]):
+                admitted.append({"index": g, "uuid": inventory[g]["uuid"]})
+            else:
+                rejections.append(
+                    f"GPU {g}: pids={inventory[g]['pids']} mem={inventory[g]['memory_mib']}MiB "
+                    f"util={inventory[g]['util_pct']}%"
+                )
+        else:
+            try:
+                verify_gpu_admission(inventory[g], allowlist, read_proc=read_proc)
+                admitted.append({"index": g, "uuid": inventory[g]["uuid"]})
+            except TrainingConfigError as exc:
+                rejections.append(str(exc))
     require(
-        idle,
+        admitted,
         "no idle eligible GPU: "
-        + "; ".join(
-            f"GPU {g}: pids={inventory[g]['pids']} mem={inventory[g]['memory_mib']}MiB util={inventory[g]['util_pct']}%"
-            for g in present
-        )
+        + "; ".join(rejections)
         + " (not starting, not waiting)",
     )
-    return idle[:limit]
+    return admitted[:limit]
 
 
-def check_idle_gpus(inventory, selection):
-    """Revalidate the selection: same physical UUID at each index, still idle."""
+def check_idle_gpus(inventory, selection, allowlist=None, read_proc=None):
+    """Revalidate the selection: same physical UUID at each index, still idle/admissible."""
     rows = []
     for gpu in selection:
         row = inventory.get(gpu["index"])
@@ -798,12 +1037,7 @@ def check_idle_gpus(inventory, selection):
             row is not None and row["uuid"] == gpu["uuid"],
             f"GPU {gpu['index']} identity changed since selection",
         )
-        require(
-            not row["pids"],
-            f"selected GPU {gpu['index']} already has compute processes: {row['pids']}",
-        )
-        require(is_idle(row), f"selected GPU {gpu['index']} is not idle: {row}")
-        rows.append(row)
+        rows.append(verify_gpu_admission(row, allowlist, read_proc=read_proc))
     return rows
 
 
@@ -815,8 +1049,11 @@ def query_gpus():
 
     return gpu_inventory(
         query("--query-gpu=index,uuid,memory.used,utilization.gpu"),
-        query("--query-compute-apps=gpu_uuid,pid"),
+        query("--query-compute-apps=gpu_uuid,pid,used_memory"),
     )
+
+
+MAX_AF_UNIX_TMPDIR_BYTES = 72  # Linux sun_path is 108 bytes; pymp/listener adds ~32 bytes.
 
 
 def child_environment(root, selection, base_env=None):
@@ -826,6 +1063,7 @@ def child_environment(root, selection, base_env=None):
             "ACCELERATE_"
         ):
             env.pop(key)
+    tmpdir = env.get("TMPDIR") or str(Path(root) / ".tmp" / "training")
     env.update(
         HUB_OFFLINE,
         CUDA_VISIBLE_DEVICES=",".join(g["uuid"] for g in selection),
@@ -834,7 +1072,7 @@ def child_environment(root, selection, base_env=None):
         PYTHONNOUSERSITE="1",
         PYTHONDONTWRITEBYTECODE="1",
         PYTHONUNBUFFERED="1",
-        TMPDIR=str(Path(root) / ".tmp" / "training"),
+        TMPDIR=tmpdir,
         OMP_NUM_THREADS="1",
     )
     return env
@@ -1033,7 +1271,7 @@ def reserve_gpus(runs, selection):
         yield
 
 
-def launch(spec, root=ROOT):
+def launch(spec, root=ROOT, allowlist=None):
     """Operator-only: admission, fresh run directory, native training on the selected GPUs."""
     import fcntl
 
@@ -1057,8 +1295,16 @@ def launch(spec, root=ROOT):
                 "at least 10 GiB free required",
             )
             check_assets(spec["_preset"], root, hash_base=True)
+            child_env = child_environment(root, spec["gpu_selection"])
+            tmpdir_path = Path(child_env["TMPDIR"])
+            tmpdir_bytes = len(os.fsencode(str(tmpdir_path)))
+            require(
+                tmpdir_bytes <= MAX_AF_UNIX_TMPDIR_BYTES,
+                f"TMPDIR {str(tmpdir_path)!r} is too long for multiprocessing AF_UNIX sockets "
+                f"({tmpdir_bytes} > {MAX_AF_UNIX_TMPDIR_BYTES} bytes); set a shorter TMPDIR",
+            )
             run, record = write_run_record(spec)
-            (Path(root) / ".tmp" / "training").mkdir(parents=True, exist_ok=True)
+            tmpdir_path.mkdir(parents=True, exist_ok=True)
             status = {
                 "status": "preflight",
                 "controller_pid": os.getpid(),
@@ -1070,12 +1316,12 @@ def launch(spec, root=ROOT):
                 with (run / "train.out").open("x") as log:
                     # Revalidate the selected UUIDs immediately before torchrun; never wait or retry.
                     status["gpu_admission"] = check_idle_gpus(
-                        query_gpus(), spec["gpu_selection"]
+                        query_gpus(), spec["gpu_selection"], allowlist=allowlist
                     )
                     proc = subprocess.Popen(
                         spec["torchrun"],
                         cwd=root,
-                        env=child_environment(root, spec["gpu_selection"]),
+                        env=child_env,
                         stdout=log,
                         stderr=subprocess.STDOUT,
                         start_new_session=True,
@@ -1130,6 +1376,10 @@ def main(argv=None):
     parser.add_argument(
         "--repo-id", required=True, help="local dataset identity, e.g. local/pick-tray"
     )
+    parser.add_argument(
+        "--gpu-allowlist",
+        help="optional run-scoped JSON allowlist for verified shared background GPU services",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "--dry-run",
@@ -1145,7 +1395,10 @@ def main(argv=None):
     if args.preset is not None and args.recipe is not None:
         parser.error("choose either a legacy preset name or --recipe, not both")
     recipe = args.recipe if args.recipe is not None else args.preset
+    allowlist = allowlist_receipt = None
     try:
+        if args.gpu_allowlist is not None:
+            allowlist, allowlist_receipt = load_gpu_allowlist(args.gpu_allowlist)
         if args.dry_run:
             os.environ["CUDA_VISIBLE_DEVICES"] = ""
             os.environ.update(HUB_OFFLINE)
@@ -1168,7 +1421,7 @@ def main(argv=None):
                     )["effective"]
                 except TrainingConfigError as exc:
                     spec["topology_candidates"][str(count)] = f"unsupported: {exc}"
-        else:  # select idle eligible GPUs before building the effective native plan
+        else:  # select idle/admissible eligible GPUs before building the effective native plan
             spec = plan(
                 recipe,
                 smoke=args.smoke,
@@ -1178,8 +1431,11 @@ def main(argv=None):
                     query_gpus(),
                     preset["guards"]["gpus"],
                     limit=preset["native_flags"]["parallelism.dp_replicate"],
+                    allowlist=allowlist,
                 ),
             )
+        if allowlist_receipt is not None:
+            spec["gpu_allowlist"] = allowlist_receipt
     except TrainingConfigError as exc:
         print(f"REJECTED: {exc}", file=sys.stderr)
         return 2
@@ -1199,7 +1455,7 @@ def main(argv=None):
         raise KeyboardInterrupt(f"signal {signum}")
 
     signal.signal(signal.SIGTERM, terminate)
-    return launch(spec)
+    return launch(spec, allowlist=allowlist) if allowlist is not None else launch(spec)
 
 
 if __name__ == "__main__":

@@ -270,6 +270,49 @@ def prepare_optimizer_and_scheduler(
     return optimizer, scheduler
 
 
+def _cgroup_limits():
+    """Read-only snapshot of this rank's cgroup and ancestor memory limits; never mutates caps."""
+    try:
+        line = Path("/proc/self/cgroup").read_text().strip()
+    except OSError:
+        return None
+    rel = line.split("::", 1)[1].lstrip("/") if "::" in line else ""
+    cg_root = Path("/sys/fs/cgroup")
+    ancestors = []
+    cur = cg_root / rel
+    while True:
+        entry = {"path": str(cur)}
+        for name in ("memory.max", "memory.high", "memory.current", "memory.swap.max"):
+            p = cur / name
+            if p.is_file():
+                try:
+                    entry[name] = p.read_text().strip()
+                except OSError:
+                    pass
+        ancestors.append(entry)
+        if cur == cg_root or cur.parent == cur:
+            break
+        cur = cur.parent
+    return {"self": line, "ancestors": ancestors}
+
+
+def _cuda_memory_stats(rank):
+    """Best-effort torch CUDA memory bytes for this rank (allocated/reserved/peaks)."""
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        return {
+            "allocated_bytes": int(torch.cuda.memory_allocated(rank)),
+            "reserved_bytes": int(torch.cuda.memory_reserved(rank)),
+            "max_allocated_bytes": int(torch.cuda.max_memory_allocated(rank)),
+            "max_reserved_bytes": int(torch.cuda.max_memory_reserved(rank)),
+        }
+    except Exception:
+        return None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", type=Path, required=True)
@@ -321,7 +364,11 @@ def main(argv=None):
         )
         torch.cuda.set_device(rank)
         require(torch.cuda.is_bf16_supported(), "BF16 required")
-        receipt.update(gpu=torch.cuda.get_device_name(rank), native_argv=native_argv)
+        receipt.update(
+            gpu=torch.cuda.get_device_name(rank),
+            native_argv=native_argv,
+            cgroup=_cgroup_limits(),
+        )
         write_json(run / f"rank-{rank}.startup.json", receipt)
 
         # Original base: exactly one strict, clean native load with positive evidence.
@@ -421,7 +468,9 @@ def main(argv=None):
                     and all(torch.isfinite(t).all().item() for t in tensors.values()),
                     "invalid/nonfinite saved adapter",
                 )
+            saved["cuda_memory"] = _cuda_memory_stats(rank)
             receipt["saves"].append(saved)
+            receipt["cuda_memory"] = saved["cuda_memory"]
             write_json(run / f"rank-{rank}.progress.json", receipt)
             return result
 
@@ -439,6 +488,7 @@ def main(argv=None):
             == guards["trainable_lora_tensors"],
             "startup proofs incomplete",
         )
+        receipt["cuda_memory"] = _cuda_memory_stats(rank)
         receipt["status"] = "success"
         write_json(run / f"rank-{rank}.json", receipt)
         return 0
@@ -447,6 +497,7 @@ def main(argv=None):
             status="failed",
             error=f"{type(exc).__name__}: {exc}",
             traceback=traceback.format_exc(),
+            cuda_memory=_cuda_memory_stats(rank),
         )
         write_json(run / f"rank-{rank}.failure.json", receipt)
         traceback.print_exc()

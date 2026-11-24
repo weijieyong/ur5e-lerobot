@@ -1053,6 +1053,7 @@ class LaunchSeamTests(unittest.TestCase):
                 "PYTHONPATH": "/x",
                 "ACCELERATE_MIXED_PRECISION": "fp16",
                 "HF_HUB_OFFLINE": "0",
+                "HF_TOKEN_PATH": "/h/.cache/huggingface/token",
                 "HOME": "/h",
             },
         )
@@ -1063,10 +1064,139 @@ class LaunchSeamTests(unittest.TestCase):
                 env["HF_HUB_OFFLINE"],
                 env["CUDA_VISIBLE_DEVICES"],
                 env["HF_HOME"],
+                env["HF_HUB_CACHE"],
+                env["HF_TOKEN_PATH"],
                 env["HOME"],
             ),
-            ("1", "GPU-a,GPU-b", "/p/hf", "/h"),
+            (
+                "1",
+                "GPU-a,GPU-b",
+                "/p/hf",
+                "/p/hf/hub",
+                "/h/.cache/huggingface/token",
+                "/h",
+            ),
         )
+
+    def test_child_environment_honors_inherited_tmpdir_and_preserves_default(self):
+        long_root = Path("/" + "/".join(["deep-worktree-segment"] * 5))
+        default_env = tl.child_environment(long_root, GPU0, {"HOME": "/h"})
+        self.assertEqual(default_env["TMPDIR"], str(long_root / ".tmp" / "training"))
+        empty_env = tl.child_environment(long_root, GPU0, {"TMPDIR": ""})
+        self.assertEqual(empty_env["TMPDIR"], str(long_root / ".tmp" / "training"))
+        custom_env = tl.child_environment(long_root, GPU0, {"TMPDIR": "/tmp/short-ipc"})
+        self.assertEqual(custom_env["TMPDIR"], "/tmp/short-ipc")
+
+    def test_launch_rejects_too_long_tmpdir_and_creates_explicit_short_tmpdir(self):
+        with TemporaryDirectory() as short_base:
+            long_root = (
+                Path(short_base)
+                / ("worktree_" + "x" * 40)
+                / ("checkpoint_" + "y" * 40)
+            )
+            presets = Path(short_base) / "presets"
+            presets.mkdir()
+            preset = fake_assets(long_root, LOWLR)
+            (presets / "test-recipe.recipe.json").write_text(json.dumps(preset))
+            spec = tl.plan("test-recipe", long_root, presets, selection=GPU0)
+
+            base_env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("RANK", "LOCAL_RANK", "WORLD_SIZE", "TMPDIR")
+            }
+            with (
+                patch.dict(os.environ, base_env, clear=True),
+                patch.object(
+                    tl.sys, "prefix", str(long_root / ".pixi" / "envs" / "default")
+                ),
+                patch.object(
+                    tl.shutil,
+                    "disk_usage",
+                    return_value=SimpleNamespace(free=100 * 1024**3),
+                ),
+                patch.object(
+                    tl, "query_gpus", return_value=tl.gpu_inventory("0, GPU-a, 15, 0\n", "")
+                ),
+                patch.object(tl.subprocess, "Popen") as popen,
+            ):
+                with self.assertRaisesRegex(tl.TrainingConfigError, "AF_UNIX"):
+                    tl.launch(spec, root=long_root)
+                popen.assert_not_called()
+
+            # Explicit short TMPDIR is created before Popen and passed unchanged to child.
+            short_tmp = Path(short_base) / "ipc"
+            self.assertFalse(short_tmp.exists())
+            seen_env = {}
+
+            def fake_popen(cmd, **kwargs):
+                seen_env.update(kwargs["env"])
+                self.assertTrue(short_tmp.is_dir())
+                run_json = Path(cmd[cmd.index("--run") + 1])
+                (run_json.parent / "rank-0.json").write_text(
+                    json.dumps({"status": "success", "rank": 0})
+                )
+                return SimpleNamespace(pid=30000, poll=lambda: 0, wait=lambda timeout=None: 0)
+
+            with (
+                patch.dict(
+                    os.environ, {**base_env, "TMPDIR": str(short_tmp)}, clear=True
+                ),
+                patch.object(
+                    tl.sys, "prefix", str(long_root / ".pixi" / "envs" / "default")
+                ),
+                patch.object(
+                    tl.shutil,
+                    "disk_usage",
+                    return_value=SimpleNamespace(free=100 * 1024**3),
+                ),
+                patch.object(
+                    tl, "query_gpus", return_value=tl.gpu_inventory("0, GPU-a, 15, 0\n", "")
+                ),
+                patch.object(tl.subprocess, "Popen", side_effect=fake_popen),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                rc = tl.launch(spec, root=long_root)
+            self.assertEqual(rc, 0)
+            self.assertEqual(seen_env["TMPDIR"], str(short_tmp))
+
+    def test_spawn_torch_storage_fd_sharing_succeeds_with_short_tmpdir_under_long_root(self):
+        import subprocess
+        import sys
+
+        with TemporaryDirectory() as short_base:
+            long_root = Path(short_base) / ("deep_" + "z" * 80)
+            short_tmp = Path(short_base) / "s"
+            short_tmp.mkdir()
+            env = tl.child_environment(
+                long_root, GPU0, {**os.environ, "TMPDIR": str(short_tmp)}
+            )
+            env["CUDA_VISIBLE_DEVICES"] = ""
+            # Spawn worker shares a torch.Tensor across multiprocessing Queue (triggers DupFd/AF_UNIX).
+            script = Path(short_base) / "spawn_probe.py"
+            script.write_text(
+                "import multiprocessing as mp, torch\n"
+                "def worker(q, done):\n"
+                "    q.put(torch.arange(16, dtype=torch.float32))\n"
+                "    done.wait(timeout=15)\n"
+                "if __name__ == '__main__':\n"
+                "    ctx = mp.get_context('spawn')\n"
+                "    q, done = ctx.Queue(), ctx.Event()\n"
+                "    p = ctx.Process(target=worker, args=(q, done))\n"
+                "    p.start()\n"
+                "    t = q.get(timeout=15)\n"
+                "    done.set()\n"
+                "    p.join(timeout=15)\n"
+                "    assert p.exitcode == 0 and int(t.sum().item()) == 120\n"
+            )
+            res = subprocess.run(
+                [sys.executable, str(script)],
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=30,
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
 
     def test_cli_rejects_unknown_preset_before_any_work(self):
         with patch.dict("os.environ"), contextlib.redirect_stderr(io.StringIO()) as err:
@@ -1219,6 +1349,191 @@ class GpuAdmissionTests(unittest.TestCase):
             json.loads((Path(spec1["run_dir"]) / "status.json").read_text())["status"],
             "failed",
         )
+
+
+class RunScopedGpuAllowlistTests(unittest.TestCase):
+    GPU_CSV = "0, GPU-a, 1427, 0\n"
+    APPS_CSV = "GPU-a, 41001, 264\nGPU-a, 41002, 432\n"
+    LIVE_PROCS = {
+        41001: {
+            "pid": 41001,
+            "starttime": 3533,
+            "exe": "/usr/libexec/remote-desktop-daemon",
+            "uid": 1000,
+            "cgroup": "0::/user.slice/app.slice/remote-desktop.service",
+        },
+        41002: {
+            "pid": 41002,
+            "starttime": 47238672,
+            "exe": "/opt/service/bin/python3.14",
+            "uid": 1000,
+            "cgroup": "0::/user.slice/app.slice/background-gateway.service",
+        },
+    }
+
+    def allowlist(self):
+        return {
+            "schema": 1,
+            "gpu_uuid": "GPU-a",
+            "max_background_memory_mib": 1920,
+            "max_noncompute_memory_mib": 1024,
+            "max_background_util_pct": 5,
+            "allowed_processes": [
+                {**self.LIVE_PROCS[41001], "max_memory_mib": 384},
+                {**self.LIVE_PROCS[41002], "max_memory_mib": 640},
+            ],
+        }
+
+    def read_proc(self, overrides=None):
+        table = copy.deepcopy(self.LIVE_PROCS)
+        if overrides:
+            table.update(overrides)
+        return lambda pid: table.get(pid)
+
+    def test_default_strict_idle_rejects_shared_background_gpu(self):
+        inv = tl.gpu_inventory(self.GPU_CSV, self.APPS_CSV)
+        self.assertFalse(tl.is_idle(inv[0]))
+        with self.assertRaisesRegex(tl.TrainingConfigError, "no idle eligible GPU"):
+            tl.select_idle_gpus(inv, [0], limit=1)
+        with self.assertRaisesRegex(tl.TrainingConfigError, "compute processes"):
+            tl.check_idle_gpus(inv, GPU0)
+
+    def test_exact_identity_and_vram_bounds_admit_selected_gpu(self):
+        inv = tl.gpu_inventory(self.GPU_CSV, self.APPS_CSV)
+        allow = self.allowlist()
+        selected = tl.select_idle_gpus(
+            inv, [0], limit=1, allowlist=allow, read_proc=self.read_proc()
+        )
+        self.assertEqual(selected, GPU0)
+        admitted = tl.check_idle_gpus(
+            inv, selected, allowlist=allow, read_proc=self.read_proc()
+        )
+        self.assertEqual(admitted[0]["admission_mode"], "run_scoped_allowlist")
+        self.assertEqual(admitted[0]["compute_memory_mib"], 696)
+        self.assertEqual(admitted[0]["noncompute_memory_mib"], 731)
+        self.assertEqual([p["pid"] for p in admitted[0]["verified_processes"]], [41001, 41002])
+
+    def test_rejects_unknown_pid_reuse_identity_mismatch_vram_and_util_drift(self):
+        allow = self.allowlist()
+        # Unknown extra compute process
+        unknown_inv = tl.gpu_inventory(
+            self.GPU_CSV, self.APPS_CSV + "GPU-a, 99999, 100\n"
+        )
+        with self.assertRaisesRegex(tl.TrainingConfigError, "unapproved compute process"):
+            tl.check_idle_gpus(unknown_inv, GPU0, allowlist=allow, read_proc=self.read_proc())
+
+        # PID reuse (starttime changed), exe changed, uid changed, cgroup changed, vanished /proc
+        base_inv = tl.gpu_inventory(self.GPU_CSV, self.APPS_CSV)
+        for overrides, pattern in (
+            ({41002: {**self.LIVE_PROCS[41002], "starttime": 99999999}}, "starttime"),
+            ({41002: {**self.LIVE_PROCS[41002], "exe": "/usr/bin/python3"}}, "exe"),
+            ({41002: {**self.LIVE_PROCS[41002], "uid": 0}}, "uid"),
+            ({41002: {**self.LIVE_PROCS[41002], "cgroup": "0::/other.service"}}, "cgroup"),
+            ({41002: None}, "cannot verify live /proc"),
+        ):
+            with self.subTest(pattern=pattern):
+                with self.assertRaisesRegex(tl.TrainingConfigError, pattern):
+                    tl.check_idle_gpus(
+                        base_inv, GPU0, allowlist=allow, read_proc=self.read_proc(overrides)
+                    )
+
+        # Per-PID VRAM spike, total background VRAM spike, non-compute VRAM drift, util spike
+        for g_csv, a_csv, pattern in (
+            (self.GPU_CSV, "GPU-a, 41001, 264\nGPU-a, 41002, 900\n", "max_memory_mib"),
+            ("0, GPU-a, 2100, 0\n", self.APPS_CSV, "total ceiling"),
+            ("0, GPU-a, 1850, 0\n", self.APPS_CSV, "non-compute VRAM"),
+            ("0, GPU-a, 1427, 12\n", self.APPS_CSV, "util 12%"),
+            (self.GPU_CSV, "GPU-a, 41001\nGPU-a, 41002\n", "missing per-process VRAM"),
+        ):
+            with self.subTest(pattern=pattern):
+                inv = tl.gpu_inventory(g_csv, a_csv)
+                with self.assertRaisesRegex(tl.TrainingConfigError, pattern):
+                    tl.check_idle_gpus(inv, GPU0, allowlist=allow, read_proc=self.read_proc())
+
+        # Allowlist applies ONLY to its named GPU UUID; another GPU stays strict idle
+        other_inv = tl.gpu_inventory("0, GPU-b, 1427, 0\n", "GPU-b, 41001, 264\n")
+        with self.assertRaisesRegex(tl.TrainingConfigError, "compute processes"):
+            tl.check_idle_gpus(
+                other_inv, [{"index": 0, "uuid": "GPU-b"}], allowlist=allow, read_proc=self.read_proc()
+            )
+
+    def test_launch_pre_popen_recheck_blocks_drift_after_selection(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            presets = Path(tmp) / "presets"
+            presets.mkdir()
+            preset = fake_assets(root, LOWLR)
+            (presets / "test-recipe.recipe.json").write_text(json.dumps(preset))
+            spec = tl.plan("test-recipe", root, presets, selection=GPU0)
+            allow = self.allowlist()
+            clean_env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("RANK", "LOCAL_RANK", "WORLD_SIZE")
+            }
+            # Unknown process appears right before Popen -> launch must reject and never spawn.
+            drifted_inv = tl.gpu_inventory(
+                self.GPU_CSV, self.APPS_CSV + "GPU-a, 77777, 500\n"
+            )
+            with (
+                patch.dict(os.environ, clean_env, clear=True),
+                patch.object(tl.sys, "prefix", str(root / ".pixi" / "envs" / "default")),
+                patch.object(
+                    tl.shutil, "disk_usage", return_value=SimpleNamespace(free=100 * 1024**3)
+                ),
+                patch.object(tl, "query_gpus", return_value=drifted_inv),
+                patch.object(tl, "read_proc_identity", side_effect=self.read_proc()),
+                patch.object(tl.subprocess, "Popen") as popen,
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                rc = tl.launch(spec, root=root, allowlist=allow)
+            self.assertEqual(rc, 1)
+            popen.assert_not_called()
+            status = json.loads((Path(spec["run_dir"]) / "status.json").read_text())
+            self.assertEqual(status["status"], "failed")
+            self.assertIn("unapproved compute process", status["error"])
+
+    def test_cli_dry_run_validates_allowlist_without_gpu_query(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            presets = root / "config/training"
+            presets.mkdir(parents=True)
+            bound = tl.bind_dataset(tl.load_preset(), "data/synthetic", "local/synthetic")
+            preset = fake_assets(root, bound)
+            del preset["native_flags"]["dataset.root"]
+            del preset["native_flags"]["dataset.repo_id"]
+            (presets / "training.recipe.json").write_text(json.dumps(preset))
+            allow_path = Path(tmp) / "allow.json"
+            allow_path.write_text(json.dumps(self.allowlist()))
+            original = tl.plan
+            with (
+                patch.object(
+                    tl,
+                    "plan",
+                    side_effect=lambda recipe, **kwargs: original(
+                        recipe, root=root, preset_dir=presets, **kwargs
+                    ),
+                ),
+                patch.object(tl, "query_gpus", side_effect=AssertionError("GPU query")),
+                patch.dict("os.environ"),
+                contextlib.redirect_stdout(io.StringIO()) as stdout,
+            ):
+                rc = tl.main(
+                    [
+                        "--dataset-root",
+                        "data/synthetic",
+                        "--repo-id",
+                        "local/synthetic",
+                        "--gpu-allowlist",
+                        str(allow_path),
+                        "--dry-run",
+                    ]
+                )
+            self.assertEqual(rc, 0)
+            report = json.loads(stdout.getvalue())
+            self.assertEqual(report["gpu_allowlist"]["gpu_uuid"], "GPU-a")
+            self.assertEqual(report["gpu_allowlist"]["allowed_pids"], [41001, 41002])
 
 
 class ExampleConfigTests(unittest.TestCase):
