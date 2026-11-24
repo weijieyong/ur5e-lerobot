@@ -323,7 +323,8 @@ apply the setting. These sessions skip all gripper communication, ignore the
 SpaceMouse gripper buttons, and move only the arm when you press h. The dataset
 stores six measured joint angles in `observation.state` and six absolute joint
 targets in `action`, all in radians. Configured cameras still record. The
-existing pi0.5 training recipe expects seven values including `gripper.pos`.
+existing pi0.5 training recipe supports both six-joint and seven-value
+(six arm joints plus `gripper.pos`) datasets; see [training and deployment](training.md).
 
 | Phase/input | Result |
 |---|---|

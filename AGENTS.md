@@ -14,9 +14,9 @@ Every command is a Pixi task in `pixi.toml`. Each description states whether the
 ## Where things live
 
 - `README.md`: entry point; `docs/operating-guide.md` owns setup/live operations and `docs/training.md` owns automatic normalization, training and deployment.
-- `docs/simulation-scope.md`: simulation scope, gates and open owner decisions; read before changing `sim/`, `scripts/sim_rollout.py` or the sim Pixi tasks.
+- `docs/simulation-scope.md`: MuJoCo simulation guide (task, data/control contract, commands, limits); read before changing `sim/`, `scripts/sim_rollout.py` or the `sim-*` Pixi tasks.
 - `GLOSSARY.md`: task, safety, data and machine terms; use these names in code and docs.
-- `src/lerobot_robot_ur5e/`: the LeRobot plugin (UR5e robot, SpaceMouse teleop, cameras).
+- `src/lerobot_robot_ur5e/`: the LeRobot plugin (UR5e robot, SpaceMouse teleop, cameras, MuJoCo sim).
 - `scripts/`: entry points, run as `python -m scripts.<name>`. `teleop`, `rollout` and the tests import shared recording feedback from `scripts.record`.
 - `config/local/machine.env`: private per-machine settings (git-ignored). `pixi run setup` merges defaults from `config/machine.env.example` and preserves existing values.
 

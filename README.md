@@ -58,6 +58,10 @@ Terms such as READY, floor, workspace and action chunk are defined in the [gloss
 2. Follow [training and deployment](docs/training.md) to train a finalized dataset with the reference schedule and copy complete assets for rollout.
 3. Return to the operating guide for supervised rollout and outcome recording.
 
+For an experimental, fixed-layout MuJoCo simulation of the UR5e + Robotiq 2F-85 task
+(scripted collection, training mechanics and learned rollout, with no sim-to-real qualification),
+see the [simulation guide](docs/simulation-scope.md).
+
 Offline tests establish software behavior only.
 Clean installation, GPU training/save/strict reload and supervised physical
 qualification remain separate acceptance gates for each deployment.
