@@ -1,4 +1,4 @@
-"""Compose the UR5e + Robotiq 2F-85 MuJoCo pick-and-place scene from pinned Menagerie assets."""
+"""Compose UR5e + Robotiq 2F-85 tabletop scenes from pinned Menagerie assets."""
 
 from pathlib import Path
 
@@ -64,8 +64,8 @@ def _camera_xyaxes(pos: np.ndarray, target: np.ndarray, up: np.ndarray) -> list[
     return [*right.tolist(), *cam_up.tolist()]
 
 
-def build_pick_place_model(width: int = 640, height: int = 480) -> mujoco.MjModel:
-    """Attach unmodified Menagerie UR5e and Robotiq 2F-85 assets onto a fixed tabletop scene."""
+def build_tabletop_spec(width: int, height: int) -> mujoco.MjSpec:
+    """Attach the unmodified robot and gripper assets to a table with two cameras."""
     if not UR5E_XML.is_file() or not GRIPPER_XML.is_file():
         raise FileNotFoundError(
             f"Pinned Menagerie assets missing under {ASSETS_DIR}"
@@ -137,7 +137,7 @@ def build_pick_place_model(width: int = 640, height: int = 480) -> mujoco.MjMode
         castshadow=False,
     )
 
-    # Fixed external front camera viewing the full table area, arm, red cube, and blue tray.
+    # Fixed external front camera viewing the arm and table area.
     front_pos = np.array([1.28, 0.0, 0.68], dtype=np.float64)
     front_target = np.array([0.34, 0.0, 0.18], dtype=np.float64)
     world.add_camera(
@@ -167,6 +167,18 @@ def build_pick_place_model(width: int = 640, height: int = 480) -> mujoco.MjMode
         solimp=[0.95, 0.99, 0.001, 0.5, 2.0],
         solref=[0.004, 1.0],
     )
+
+    # The UR5e-only keyframe does not include the attached gripper joints.
+    for key in list(spec.keys):
+        spec.delete(key)
+
+    return spec
+
+
+def build_pick_place_model(width: int = 640, height: int = 480) -> mujoco.MjModel:
+    """Add the blue tray and free red cube to the tabletop."""
+    spec = build_tabletop_spec(width, height)
+    world = spec.worldbody
 
     # Blue tray with flat floor and low retaining rim.
     tray = world.add_body(
@@ -233,9 +245,5 @@ def build_pick_place_model(width: int = 640, height: int = 480) -> mujoco.MjMode
         solimp=[0.95, 0.99, 0.001, 0.5, 2.0],
         solref=[0.004, 1.0],
     )
-
-    # Remove the UR5e-only keyframe whose qpos length does not include gripper/cube DOFs.
-    for key in list(spec.keys):
-        spec.delete(key)
 
     return spec.compile()

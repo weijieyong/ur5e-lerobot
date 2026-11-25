@@ -138,6 +138,56 @@ class SimulationContractTests(unittest.TestCase):
                     robot.disconnect()
 
 
+class LaserTraceTests(unittest.TestCase):
+    def test_laser_stays_between_pads_and_spot_traces_the_line(self):
+        from lerobot_robot_ur5e.sim.laser_trace import (
+            DEFAULT_LAYOUT,
+            LINE_HALF_WIDTH_M,
+            LaserTrace,
+            trace_targets,
+        )
+
+        sim = LaserTrace()
+        sim.reset()
+        start, end = DEFAULT_LAYOUT.endpoints
+        spot_positions = []
+        for index, target in enumerate(trace_targets()):
+            sim.step(target)
+            spot = sim.data.site("laser_dot").xpos.copy()
+            spot_positions.append(spot)
+            with self.subTest(frame=index):
+                self.assertTrue(sim.laser_gripped())
+                self.assertGreater(spot[2], 0)
+                self.assertLessEqual(abs(spot[0] - start[0]), LINE_HALF_WIDTH_M)
+
+        spot_xy = np.array(spot_positions)[:, :2]
+        np.testing.assert_allclose(spot_xy[0], start, atol=0.008)
+        np.testing.assert_allclose(spot_xy[-1], end, atol=0.008)
+        step_distance = np.linalg.norm(np.diff(spot_xy, axis=0), axis=1)
+        self.assertLessEqual(float(step_distance.max()), 0.01)
+
+    def test_varied_layout_is_framed_and_a_cropped_view_is_rejected(self):
+        import mujoco
+
+        from lerobot_robot_ur5e.sim.laser_trace import CAMERAS, LaserTrace, sample_layouts
+        from scripts.sim_laser_record import HEIGHT, WIDTH, TraceVisibility
+
+        layouts = list(sample_layouts(10, seed=42))
+        for attribute in ("center_xy", "length_m", "angle_deg"):
+            self.assertEqual(len({getattr(layout, attribute) for layout in layouts}), 10)
+        sim = LaserTrace(layouts[0], width=WIDTH, height=HEIGHT)
+        sim.reset()
+        visibility = TraceVisibility(sim)
+        with mujoco.Renderer(sim.model, height=HEIGHT, width=WIDTH) as renderer:
+            for camera in CAMERAS:
+                image, margin = visibility.frame(renderer, camera)
+                self.assertEqual(image.shape, (HEIGHT, WIDTH, 3))
+                self.assertGreater(margin, 2)
+            sim.data.camera("wrist").xpos[1] += 2
+            with self.assertRaisesRegex(ValueError, "wrist crops"):
+                visibility.frame(renderer, "wrist")
+
+
 class SimRolloutGlueTests(unittest.TestCase):
     def _base_cfg(self):
         return SimpleNamespace(

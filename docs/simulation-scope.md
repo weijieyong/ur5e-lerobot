@@ -1,4 +1,4 @@
-# Simulation Guide: UR5e Pick-and-Place in MuJoCo
+# Simulation Guide: UR5e in MuJoCo
 
 Fixed-layout MuJoCo simulation of the UR5e + Robotiq 2F-85 pick-and-place task (`"Pick up the red cube and place it on the blue tray"`) in the combined Pixi environment (LeRobot 0.7.0, `mujoco-python` 3.16.0).
 
@@ -67,3 +67,27 @@ Physical drivers and guards (`home_joints_deg`, `measured_joints()`, `go_home()`
 - **Training:** [training.md](training.md), [train_lora.py](../scripts/train_lora.py), [train_lora_entry.py](../scripts/train_lora_entry.py), `config/training/*.recipe.json`
 - **Hardware & docs:** [operating-guide.md](operating-guide.md), [GLOSSARY.md](../GLOSSARY.md), `src/lerobot_robot_ur5e/lerobot_robot_ur5e/ur5e.py`, `config_ur5e.py`, [record.py](../scripts/record.py), [rollout.py](../scripts/rollout.py)
 - **LeRobot 0.7.0:** `lerobot.robots.sim_robot`, `lerobot.sim.integrations.gym`, `lerobot.scripts.lerobot_record`, `lerobot.rollout.strategies.episodic`
+
+## Laser line trace
+
+```sh
+pixi run sim-laser-trace
+```
+
+The UR5e starts with the Robotiq 2F-85 fingers gripping a simulated laser pointed at the
+table. Scripted motion sweeps the projected red spot along a 32 cm straight black line from
+the yellow start dots to the blue finish dots. The run writes an MP4 to
+`outputs/laser-trace-YYYY-MM-DD/laser-trace.mp4`. Pass a path as the first argument to
+save the video elsewhere.
+
+```sh
+pixi run sim-laser-record data/local/sim_laser_trace local/sim_laser_trace 10 42
+```
+
+Collection saves a local LeRobot v3.0 dataset with 640×480 `front` and `wrist` RGB videos at
+15 Hz, measured robot state, and absolute joint and gripper targets. The episode count and
+layout seed default to 10 and 42. The sampler varies the line center, length (15–29 cm), and
+angle (−40° to +40° from table +Y toward +X). At every recorded frame, the collector checks
+that both cameras frame the markings and can see the black line and all six endpoint dots.
+The collection report under `outputs/laser-trace-YYYY-MM-DD/` lists the layout and camera
+margins for each episode.

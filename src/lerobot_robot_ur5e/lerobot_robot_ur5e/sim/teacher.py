@@ -7,7 +7,6 @@ never runs during simulation rollout and never counts as learned policy success.
 
 from __future__ import annotations
 
-import mujoco
 import numpy as np
 
 from lerobot.teleoperators import Teleoperator
@@ -15,17 +14,8 @@ from lerobot.teleoperators import Teleoperator
 from ..ur5e import GRIPPER, JOINTS
 from .config_sim import UR5eSimTeacherConfig
 from .env import ACTIVE_SIM_ENVS, UR5ePickPlaceEnv
+from .ik import DOWNWARD_PINCH_ROT, PinchIK
 
-# Desired gripper pinch orientation: local +Z pointing straight down (-Z world),
-# jaw opening axis aligned cleanly with world Y so jaws straddle the cube symmetrically.
-TARGET_PINCH_ROT = np.array(
-    [
-        [1.0, 0.0, 0.0],
-        [0.0, -1.0, 0.0],
-        [0.0, 0.0, -1.0],
-    ],
-    dtype=np.float64,
-)
 
 PHASES = (
     "APPROACH_ABOVE_CUBE",
@@ -50,7 +40,7 @@ class UR5eSimTeacher(Teleoperator):
         self.config = config
         self._connected = False
         self._env: UR5ePickPlaceEnv | None = None
-        self._ik_data: mujoco.MjData | None = None
+        self._ik: PinchIK | None = None
         self._episode_count: int = -1
         self._phase_idx: int = 0
         self._phase_steps: int = 0
@@ -87,7 +77,7 @@ class UR5eSimTeacher(Teleoperator):
     def disconnect(self) -> None:
         self._connected = False
         self._env = None
-        self._ik_data = None
+        self._ik = None
 
     def _resolve_env(self) -> UR5ePickPlaceEnv:
         env = ACTIVE_SIM_ENVS.get(self.config.env_id)
@@ -97,58 +87,9 @@ class UR5eSimTeacher(Teleoperator):
             )
         if env is not self._env:
             self._env = env
-            self._ik_data = mujoco.MjData(env.model)
+            self._ik = PinchIK(env.model)
             self._episode_count = -1
         return env
-
-    def _solve_ik(
-        self,
-        env: UR5ePickPlaceEnv,
-        q_seed: np.ndarray,
-        target_pos: np.ndarray,
-        target_rot: np.ndarray,
-        iters: int = 24,
-    ) -> np.ndarray:
-        """Compute damped least-squares 6-DoF IK for the pinch site on a private MjData."""
-        assert self._ik_data is not None
-        ik_data = self._ik_data
-        model = env.model
-        ik_data.qpos[:] = env.data.qpos
-        ik_data.qpos[env._arm_qpos_adr] = q_seed
-
-        jacp = np.zeros((3, model.nv), dtype=np.float64)
-        jacr = np.zeros((3, model.nv), dtype=np.float64)
-        damping = 0.04
-        arm_dofs = env._arm_dof_adr
-
-        for _ in range(iters):
-            mujoco.mj_kinematics(model, ik_data)
-            mujoco.mj_comPos(model, ik_data)
-            cur_pos = ik_data.site_xpos[env._pinch_site_id]
-            cur_rot = ik_data.site_xmat[env._pinch_site_id].reshape(3, 3)
-
-            pos_err = target_pos - cur_pos
-            rot_err = 0.5 * (
-                np.cross(cur_rot[:, 0], target_rot[:, 0])
-                + np.cross(cur_rot[:, 1], target_rot[:, 1])
-                + np.cross(cur_rot[:, 2], target_rot[:, 2])
-            )
-            err = np.concatenate([pos_err, rot_err])
-            if np.linalg.norm(pos_err) < 1e-4 and np.linalg.norm(rot_err) < 1e-3:
-                break
-
-            mujoco.mj_jacSite(model, ik_data, jacp, jacr, env._pinch_site_id)
-            jac = np.vstack([jacp[:, arm_dofs], jacr[:, arm_dofs]])
-            dq = jac.T @ np.linalg.solve(jac @ jac.T + (damping**2) * np.eye(6), err)
-            dq = np.clip(dq, -0.25, 0.25)
-            q_next = np.clip(
-                ik_data.qpos[env._arm_qpos_adr] + dq,
-                env._arm_ctrl_low,
-                env._arm_ctrl_high,
-            )
-            ik_data.qpos[env._arm_qpos_adr] = q_next
-
-        return ik_data.qpos[env._arm_qpos_adr].copy()
 
     def _step_toward(self, q_cur: np.ndarray, q_goal: np.ndarray) -> np.ndarray:
         step = self.config.max_joint_step_rad
@@ -231,7 +172,8 @@ class UR5eSimTeacher(Teleoperator):
         if target_pos is None:
             q_cmd = self._hold_qpos if self._hold_qpos is not None else q_cur
         else:
-            q_goal = self._solve_ik(env, q_cur, target_pos, TARGET_PINCH_ROT)
+            assert self._ik is not None
+            q_goal = self._ik.solve(env.data.qpos, target_pos, DOWNWARD_PINCH_ROT)
             q_cmd = self._step_toward(q_cur, q_goal)
 
         action = {name: float(val) for name, val in zip(JOINTS, q_cmd, strict=True)}

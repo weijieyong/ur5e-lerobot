@@ -107,7 +107,6 @@ class UR5ePickPlaceEnv(gym.Env):
             dtype=np.int32,
         )
         self._arm_qpos_adr = self.model.jnt_qposadr[self._arm_jnt_ids]
-        self._arm_dof_adr = self.model.jnt_dofadr[self._arm_jnt_ids]
         self._arm_act_ids = np.array(
             [
                 self._require_id(mujoco.mjtObj.mjOBJ_ACTUATOR, n)

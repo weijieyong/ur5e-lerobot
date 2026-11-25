@@ -64,7 +64,9 @@ The experimental MuJoCo environment uses the same LeRobot v3 recording and pi0.5
 training pipeline. See the [simulation guide](docs/simulation-scope.md) for commands and limits.
 It uses a fixed layout and does not qualify a policy for real hardware.
 
-These recordings show the front camera on the left and wrist camera on the right.
+Run `pixi run sim-laser-trace` to preview the [scripted laser line trace](docs/simulation-scope.md#laser-line-trace).
+
+The pick-and-place recordings below show the front camera on the left and wrist camera on the right.
 Click either animated preview to open its full-resolution MP4. Playback follows the saved
 dataset timestamps, not wall-clock inference timing.
 

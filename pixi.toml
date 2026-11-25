@@ -94,6 +94,18 @@ cmd = """python -m scripts.rollout --robot.type=ur5e \
   --dataset.push_to_hub=false --dataset.no_stamp=true \
   --return_to_initial_position=false --display_data=false {{ extra }}"""
 
+[tasks.sim-laser-trace]
+description = "Render a scripted yellow-to-blue laser trace in MuJoCo to a local MP4 (no hardware access)"
+args = [{ arg = "output", default = "" }]
+env = { MUJOCO_GL = "egl" }
+cmd = 'python -m scripts.sim_laser_trace "{{ output }}"'
+
+[tasks.sim-laser-record]
+description = "Collect varied MuJoCo laser traces in local LeRobot v3.0 with two verified camera views (no hardware access)"
+args = [{ arg = "dataset_root" }, { arg = "repo_id" }, { arg = "episodes", default = "10" }, { arg = "seed", default = "42" }]
+env = { MUJOCO_GL = "egl", HF_HUB_OFFLINE = "1", HF_DATASETS_OFFLINE = "1", TRANSFORMERS_OFFLINE = "1" }
+cmd = 'python -m scripts.sim_laser_record "{{ dataset_root }}" "{{ repo_id }}" --episodes {{ episodes }} --seed {{ seed }}'
+
 [tasks.sim-record]
 description = "CPU MuJoCo UR5e scripted-teacher collection via native lerobot-record (explicit sim root/repo_id; no hardware; local v3.0)"
 args = [{ arg = "dataset_root" }, { arg = "repo_id" }, { arg = "episodes", default = "2" }, { arg = "extra", default = "" }]
