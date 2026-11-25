@@ -176,6 +176,20 @@ and save guards stay in force.
 Run the operator-authorized GPU smoke/save and strict reload checks before a long
 run. Every run has a new `outputs/training-runs/` directory.
 
+## Plot training results
+
+From the project root, replace `RUN_DIR` with a directory name under
+`outputs/training-runs/`.
+
+```sh
+pixi run plot-training outputs/training-runs/RUN_DIR \
+  -o "outputs/training-report-$(date +%F)/report.html"
+```
+
+To compare runs, add more run directory paths before `-o`. Open the HTML report in
+a browser to inspect training and development loss, learning rate, and saved
+checkpoints. The task reads local logs and checkpoint metadata and runs offline.
+
 ## Warm-start from a saved adapter
 
 Use `config/training/training-warm-start.recipe.json` to start from a previous

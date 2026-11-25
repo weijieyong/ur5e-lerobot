@@ -16,6 +16,7 @@ lerobot-viz = "==0.7.0"
 pytorch-gpu = "*"
 hidapi = ">=0.14"
 mujoco-python = "==3.16.0"
+plotly = ">=6,<7"
 ruff = ">=0.17.4,<0.18"
 
 [pypi-dependencies]
@@ -37,6 +38,7 @@ set-neutral = { cmd = "python -m scripts.set_robot_reference neutral", descripti
 timing = { cmd = "python -m scripts.check_timing", description = "Report timing from the latest robot session log (no hardware access)" }
 test = { cmd = "python -m unittest discover -s tests -v", description = "Offline recording, rollout and environment checks; no hardware access" }
 lint = { cmd = "ruff check .", description = "Correctness lint (ruff.toml); no hardware access" }
+plot-training = { cmd = "python -m scripts.plot_training", description = "Build an offline HTML report from local training runs (no hardware access)" }
 smoke-docker = { cmd = "./scripts/test_clean_env.sh", description = "Fresh-container locked install, CUDA check and offline tests (needs Docker + NVIDIA Container Toolkit; no robot hardware)" }
 hw-check = { cmd = "python -m scripts.hw_check", description = "Read-only check of robot, gripper, cameras and SpaceMouse" }
 calibrate-cameras = { cmd = "python -m scripts.calibrate_cameras", description = "Calibrate both cameras from white-paper patches; confirm y/n before updating machine.env" }

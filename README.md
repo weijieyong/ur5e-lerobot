@@ -55,7 +55,9 @@ Terms such as READY, floor, workspace and action chunk are defined in the [gloss
 
 1. Follow the [operating guide](docs/operating-guide.md) for prerequisites, measured
    configuration, camera checks, teleoperation and collection.
-2. Follow [training and deployment](docs/training.md) to train a finalized dataset with the reference schedule and copy complete assets for rollout.
+2. Follow [training and deployment](docs/training.md) to train a finalized dataset with the
+   reference schedule and copy complete assets for rollout. Use `pixi run plot-training`
+   to [plot training results](docs/training.md#plot-training-results) and inspect saved checkpoints.
 3. Return to the operating guide for supervised rollout and outcome recording.
 
 ## Simulation
